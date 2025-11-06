@@ -28,6 +28,28 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
 ## Data Query Issues
 
+### Issue: TileDB MemoryError - "Unable to allocate 4.00 GiB for an array"
+**Cause:** TileDB's default memory budget (5-10 GB) can cause allocation errors with large GEDI queries.
+
+**Solution:** FIXED in `data/gedi.py` - TileDB memory budget is now configurable:
+```python
+# Initialize with custom memory budget (default: 512 MB)
+querier = GEDIQuerier(memory_budget_mb=512)
+
+# For very memory-constrained environments:
+querier = GEDIQuerier(memory_budget_mb=256)
+
+# For larger queries (if you have the RAM):
+querier = GEDIQuerier(memory_budget_mb=1024)
+```
+
+The fix includes:
+- Configurable TileDB memory budget (`sm.memory_budget`, `sm.memory_budget_var`)
+- Reduced tile cache size to prevent memory spikes
+- Limited concurrent operations to reduce memory footprint
+- Automatic fallback to chunked queries on memory errors
+- Better error messages with actionable suggestions
+
 ### Issue: "For 'bounding_box' queries, a valid GeoDataFrame must be provided"
 **Cause:** gediDB expects GeoDataFrame, not shapely geometry.
 
