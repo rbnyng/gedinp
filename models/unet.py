@@ -50,7 +50,12 @@ class Up(nn.Module):
 
         # Use bilinear upsampling or transposed convolutions
         if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+            # Bilinear upsample doesn't change channels, so add 1x1 conv to reduce
+            # from in_channels to in_channels // 2 before concatenation
+            self.up = nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+                nn.Conv2d(in_channels, in_channels // 2, kernel_size=1)
+            )
             self.conv = DoubleConv(in_channels, out_channels)
         else:
             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
