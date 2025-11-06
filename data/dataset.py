@@ -1,0 +1,259 @@
+"""
+PyTorch Dataset for Neural Process training with GEDI + GeoTessera embeddings.
+"""
+
+import torch
+from torch.utils.data import Dataset
+import numpy as np
+import pandas as pd
+from typing import Optional, Dict, Tuple
+import random
+
+
+class GEDINeuralProcessDataset(Dataset):
+    """
+    Dataset for Neural Process training with GEDI shots and embeddings.
+
+    Each sample is a tile with multiple GEDI shots. The dataset creates
+    context/target splits for Neural Process training.
+    """
+
+    def __init__(
+        self,
+        data_df: pd.DataFrame,
+        min_shots_per_tile: int = 10,
+        max_shots_per_tile: Optional[int] = None,
+        context_ratio_range: Tuple[float, float] = (0.1, 0.9),
+        normalize_coords: bool = True,
+        normalize_agbd: bool = True,
+        agbd_scale: float = 200.0  # Typical max AGBD in Mg/ha
+    ):
+        """
+        Initialize dataset.
+
+        Args:
+            data_df: DataFrame with columns: latitude, longitude, agbd, embedding_patch, tile_id
+            min_shots_per_tile: Minimum number of shots per tile to include
+            max_shots_per_tile: Maximum shots per tile (subsample if exceeded)
+            context_ratio_range: Range of context/total ratios for training (min, max)
+            normalize_coords: Normalize coordinates to [0, 1] within each tile
+            normalize_agbd: Normalize AGBD values
+            agbd_scale: Scale factor for AGBD normalization
+        """
+        # Filter out shots without embeddings
+        self.data_df = data_df[data_df['embedding_patch'].notna()].copy()
+
+        # Group by tiles
+        self.tiles = []
+        for tile_id, group in self.data_df.groupby('tile_id'):
+            if len(group) >= min_shots_per_tile:
+                # Subsample if too many shots
+                if max_shots_per_tile and len(group) > max_shots_per_tile:
+                    group = group.sample(n=max_shots_per_tile, random_state=42)
+                self.tiles.append(group)
+
+        self.min_shots_per_tile = min_shots_per_tile
+        self.max_shots_per_tile = max_shots_per_tile
+        self.context_ratio_range = context_ratio_range
+        self.normalize_coords = normalize_coords
+        self.normalize_agbd = normalize_agbd
+        self.agbd_scale = agbd_scale
+
+        print(f"Dataset initialized with {len(self.tiles)} tiles")
+        if len(self.tiles) > 0:
+            shots_per_tile = [len(t) for t in self.tiles]
+            print(f"Shots per tile: min={min(shots_per_tile)}, "
+                  f"max={max(shots_per_tile)}, mean={np.mean(shots_per_tile):.1f}")
+
+    def __len__(self) -> int:
+        return len(self.tiles)
+
+    def _normalize_coordinates(
+        self,
+        coords: np.ndarray,
+        tile_data: pd.DataFrame
+    ) -> np.ndarray:
+        """
+        Normalize coordinates to [0, 1] range within tile bounds.
+
+        Args:
+            coords: (N, 2) array of [lon, lat]
+            tile_data: DataFrame for the tile
+
+        Returns:
+            Normalized coordinates (N, 2)
+        """
+        lon_min, lon_max = tile_data['longitude'].min(), tile_data['longitude'].max()
+        lat_min, lat_max = tile_data['latitude'].min(), tile_data['latitude'].max()
+
+        # Avoid division by zero for single point
+        lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
+        lat_range = lat_max - lat_min if lat_max > lat_min else 1.0
+
+        normalized = coords.copy()
+        normalized[:, 0] = (coords[:, 0] - lon_min) / lon_range
+        normalized[:, 1] = (coords[:, 1] - lat_min) / lat_range
+
+        return normalized
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """
+        Get a training sample.
+
+        Returns a dict with:
+            - context_coords: (n_context, 2) coordinates [lon, lat]
+            - context_embeddings: (n_context, patch_size, patch_size, 128)
+            - context_agbd: (n_context, 1) AGBD values
+            - target_coords: (n_target, 2) coordinates
+            - target_embeddings: (n_target, patch_size, patch_size, 128)
+            - target_agbd: (n_target, 1) AGBD values
+        """
+        tile_data = self.tiles[idx].copy()
+        n_shots = len(tile_data)
+
+        # Random context/target split
+        context_ratio = random.uniform(*self.context_ratio_range)
+        n_context = max(1, int(n_shots * context_ratio))
+
+        # Randomly select context shots
+        context_indices = random.sample(range(n_shots), n_context)
+        target_indices = [i for i in range(n_shots) if i not in context_indices]
+
+        # Extract data
+        tile_array = tile_data.to_numpy()
+        coords = tile_data[['longitude', 'latitude']].values
+        embeddings = np.stack(tile_data['embedding_patch'].values)  # (N, H, W, C)
+        agbd = tile_data['agbd'].values[:, None]  # (N, 1)
+
+        # Normalize
+        if self.normalize_coords:
+            coords = self._normalize_coordinates(coords, tile_data)
+
+        if self.normalize_agbd:
+            agbd = agbd / self.agbd_scale
+
+        # Split context/target
+        context_coords = coords[context_indices]
+        context_embeddings = embeddings[context_indices]
+        context_agbd = agbd[context_indices]
+
+        target_coords = coords[target_indices]
+        target_embeddings = embeddings[target_indices]
+        target_agbd = agbd[target_indices]
+
+        return {
+            'context_coords': torch.from_numpy(context_coords).float(),
+            'context_embeddings': torch.from_numpy(context_embeddings).float(),
+            'context_agbd': torch.from_numpy(context_agbd).float(),
+            'target_coords': torch.from_numpy(target_coords).float(),
+            'target_embeddings': torch.from_numpy(target_embeddings).float(),
+            'target_agbd': torch.from_numpy(target_agbd).float(),
+        }
+
+
+def collate_neural_process(batch):
+    """
+    Custom collate function for Neural Process batches.
+
+    Handles variable numbers of context and target points across tiles.
+
+    Args:
+        batch: List of dicts from GEDINeuralProcessDataset
+
+    Returns:
+        Batched dict with lists of tensors (one per tile in batch)
+    """
+    # Since tiles can have different numbers of shots, we return lists
+    return {
+        'context_coords': [item['context_coords'] for item in batch],
+        'context_embeddings': [item['context_embeddings'] for item in batch],
+        'context_agbd': [item['context_agbd'] for item in batch],
+        'target_coords': [item['target_coords'] for item in batch],
+        'target_embeddings': [item['target_embeddings'] for item in batch],
+        'target_agbd': [item['target_agbd'] for item in batch],
+    }
+
+
+class GEDIInferenceDataset(Dataset):
+    """
+    Dataset for inference on a dense grid.
+
+    Used for predicting AGBD at arbitrary locations within a tile.
+    """
+
+    def __init__(
+        self,
+        context_df: pd.DataFrame,
+        query_lons: np.ndarray,
+        query_lats: np.ndarray,
+        query_embeddings: np.ndarray,
+        normalize_coords: bool = True,
+        normalize_agbd: bool = True,
+        agbd_scale: float = 200.0
+    ):
+        """
+        Initialize inference dataset.
+
+        Args:
+            context_df: DataFrame with context GEDI shots
+            query_lons: Array of query longitudes
+            query_lats: Array of query latitudes
+            query_embeddings: Array of query embeddings (N, patch_size, patch_size, 128)
+            normalize_coords: Normalize coordinates
+            normalize_agbd: Normalize AGBD
+            agbd_scale: AGBD scale factor
+        """
+        self.context_df = context_df[context_df['embedding_patch'].notna()].copy()
+        self.query_lons = query_lons
+        self.query_lats = query_lats
+        self.query_embeddings = query_embeddings
+
+        self.normalize_coords = normalize_coords
+        self.normalize_agbd = normalize_agbd
+        self.agbd_scale = agbd_scale
+
+        # Prepare context data
+        self.context_coords = self.context_df[['longitude', 'latitude']].values
+        self.context_embeddings = np.stack(self.context_df['embedding_patch'].values)
+        self.context_agbd = self.context_df['agbd'].values[:, None]
+
+        # Normalize context
+        if self.normalize_agbd:
+            self.context_agbd = self.context_agbd / self.agbd_scale
+
+    def __len__(self) -> int:
+        return len(self.query_lons)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get query point with context."""
+        query_coord = np.array([[self.query_lons[idx], self.query_lats[idx]]])
+        query_embedding = self.query_embeddings[idx:idx+1]
+
+        # Normalize if needed
+        if self.normalize_coords:
+            # Normalize based on combined context + query extent
+            all_coords = np.vstack([self.context_coords, query_coord])
+            lon_min, lon_max = all_coords[:, 0].min(), all_coords[:, 0].max()
+            lat_min, lat_max = all_coords[:, 1].min(), all_coords[:, 1].max()
+
+            lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
+            lat_range = lat_max - lat_min if lat_max > lat_min else 1.0
+
+            context_coords_norm = self.context_coords.copy()
+            context_coords_norm[:, 0] = (context_coords_norm[:, 0] - lon_min) / lon_range
+            context_coords_norm[:, 1] = (context_coords_norm[:, 1] - lat_min) / lat_range
+
+            query_coord_norm = query_coord.copy()
+            query_coord_norm[:, 0] = (query_coord_norm[:, 0] - lon_min) / lon_range
+            query_coord_norm[:, 1] = (query_coord_norm[:, 1] - lat_min) / lat_range
+        else:
+            context_coords_norm = self.context_coords
+            query_coord_norm = query_coord
+
+        return {
+            'context_coords': torch.from_numpy(context_coords_norm).float(),
+            'context_embeddings': torch.from_numpy(self.context_embeddings).float(),
+            'context_agbd': torch.from_numpy(self.context_agbd).float(),
+            'query_coord': torch.from_numpy(query_coord_norm).float(),
+            'query_embedding': torch.from_numpy(query_embedding).float(),
+        }
