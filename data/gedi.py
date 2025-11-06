@@ -7,6 +7,7 @@ Handles querying GEDI L4A data for aboveground biomass (AGBD) with spatial filte
 import gedidb as gdb
 import pandas as pd
 import xarray as xr
+import geopandas as gpd
 from shapely.geometry import box
 from typing import Optional, Union, List
 import numpy as np
@@ -75,8 +76,9 @@ class GEDIQuerier:
                 "shot_number", "beam"
             ]
 
-        # Create bbox geometry
-        roi = box(*bbox)
+        # Create bbox geometry as GeoDataFrame (required by gediDB)
+        bbox_geom = box(*bbox)
+        roi = gpd.GeoDataFrame([1], geometry=[bbox_geom], crs="EPSG:4326")
 
         # Query data
         gedi_data = self.provider.get_data(
