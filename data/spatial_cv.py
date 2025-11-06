@@ -59,8 +59,8 @@ class SpatialTileSplitter:
         np.random.shuffle(shuffled_tiles)
 
         # Calculate split sizes
-        n_test = max(1, int(self.n_tiles * self.test_ratio))
-        n_val = max(1, int(self.n_tiles * self.val_ratio))
+        n_test = max(1, int(self.n_tiles * self.test_ratio)) if self.test_ratio > 0 else 0
+        n_val = max(1, int(self.n_tiles * self.val_ratio)) if self.val_ratio > 0 else 0
         n_train = self.n_tiles - n_test - n_val
 
         # Split tiles
@@ -170,7 +170,7 @@ class BufferedSpatialSplitter:
 
         # Shuffle and select test tiles
         np.random.shuffle(tile_ids)
-        n_test = max(1, int(n_tiles * self.test_ratio))
+        n_test = max(1, int(n_tiles * self.test_ratio)) if self.test_ratio > 0 else 0
         test_tiles = tile_ids[:n_test]
 
         # Find tiles within buffer of test tiles
@@ -192,8 +192,11 @@ class BufferedSpatialSplitter:
             ).split()
 
         # Select validation tiles from remaining
-        n_val = max(1, int(len(remaining_tiles) * self.val_ratio / (1 - self.test_ratio)))
-        n_val = min(n_val, len(remaining_tiles) - 1)
+        if self.val_ratio > 0:
+            n_val = max(1, int(len(remaining_tiles) * self.val_ratio / (1 - self.test_ratio)))
+            n_val = min(n_val, len(remaining_tiles) - 1)
+        else:
+            n_val = 0
         val_tiles = remaining_tiles[:n_val]
 
         # Find tiles within buffer of val tiles
