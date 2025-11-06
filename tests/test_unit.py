@@ -25,12 +25,13 @@ def test_tile_coordinate_math():
 
     # Test cases: (input_lon, input_lat) -> expected (tile_lon, tile_lat)
     test_cases = [
-        ((0.0, 0.0), (0.05, 0.05)),
-        ((0.1, 0.1), (0.15, 0.15)),
-        ((30.35, -15.75), (30.35, -15.75)),  # Should snap to grid
+        ((0.0, 0.0), (-0.05, -0.05)),  # Closest tile to 0.0 is -0.05
+        ((0.1, 0.1), (0.05, 0.05)),    # Closest to 0.1 is 0.05
+        ((0.12, 0.12), (0.15, 0.15)),  # Closest to 0.12 is 0.15
+        ((30.35, -15.75), (30.35, -15.75)),  # Already on grid
         ((30.256, -15.853), (30.25, -15.85)),  # Edge of test region
     ]
-
+    
     print("\nTesting tile center calculations:")
     print(f"{'Input':<20} {'Expected':<20} {'Actual':<20} {'Status'}")
     print("-" * 80)

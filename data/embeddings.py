@@ -55,8 +55,8 @@ class EmbeddingExtractor:
             (tile_lon, tile_lat) center coordinates
         """
         # Round to nearest 0.1 degree grid aligned at 0.05, 0.15, 0.25, etc.
-        tile_lon = round(lon / 0.1) * 0.1 + 0.05
-        tile_lat = round(lat / 0.1) * 0.1 + 0.05
+        tile_lon = round((lon - 0.05) / 0.1) * 0.1 + 0.05
+        tile_lat = round((lat - 0.05) / 0.1) * 0.1 + 0.05
         return tile_lon, tile_lat
 
     def _load_tile(

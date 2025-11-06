@@ -71,15 +71,16 @@ class GEDIQuerier:
         """
         if variables is None:
             variables = [
-                "latitude", "longitude", "agbd",
-                "l4_quality_flag", "sensitivity",
-                "shot_number", "beam"
+                "lat_lowestmode", "lon_lowestmode",  # Coordinates
+                "agbd",  # Aboveground biomass density
+                "l4_quality_flag", "sensitivity",  # Quality metrics
+                "shot_number", "beam"  # Identifiers
             ]
-
+ 
         # Create bbox geometry as GeoDataFrame (required by gediDB)
         bbox_geom = box(*bbox)
         roi = gpd.GeoDataFrame([1], geometry=[bbox_geom], crs="EPSG:4326")
-
+ 
         # Query data
         gedi_data = self.provider.get_data(
             variables=variables,
@@ -89,9 +90,15 @@ class GEDIQuerier:
             end_time=end_time,
             return_type='xarray'
         )
-
+ 
         # Convert to DataFrame
         df = gedi_data.to_dataframe().reset_index()
+ 
+        # Rename coordinates to standard names for consistency
+        df = df.rename(columns={
+            'lat_lowestmode': 'latitude',
+            'lon_lowestmode': 'longitude'
+        })
 
         # Apply quality filtering
         if quality_filter and 'l4_quality_flag' in df.columns:
