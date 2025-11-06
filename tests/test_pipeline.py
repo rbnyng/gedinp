@@ -204,7 +204,7 @@ def test_3_embedding_extraction(tile_lon, tile_lat):
     print(f"\n--- Testing Coordinate Conversion ---")
     test_lon, test_lat = tile_lon, tile_lat  # Center of tile
     try:
-        row, col = extractor._lonlat_to_pixel(test_lon, test_lat, transform)
+        row, col = extractor._lonlat_to_pixel(test_lon, test_lat, transform, crs)
         print(f"Tile center ({test_lon}, {test_lat}) → pixel ({row}, {col})")
         print(f"Expected center: ~({embedding.shape[0]//2}, {embedding.shape[1]//2})")
 
