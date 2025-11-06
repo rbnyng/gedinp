@@ -248,7 +248,7 @@ def main():
 
     # Load model
     print("Loading model...")
-    checkpoint = torch.load(args.model_path, map_location=args.device)
+    checkpoint = torch.load(args.model_path, map_location=args.device, weights_only=False)
 
     # Load config to get model architecture params
     model_dir = Path(args.model_path).parent
