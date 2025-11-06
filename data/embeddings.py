@@ -10,6 +10,7 @@ from typing import Optional, Tuple, Dict
 import pandas as pd
 from pathlib import Path
 import pickle
+from pyproj import Transformer
 
 
 class EmbeddingExtractor:
@@ -36,6 +37,9 @@ class EmbeddingExtractor:
 
         # Cache for tiles to avoid repeated downloads
         self.tile_cache: Dict[Tuple[float, float], Tuple[np.ndarray, object, object]] = {}
+
+        # Cache for coordinate transformers to avoid repeated creation
+        self.transformer_cache: Dict[str, Transformer] = {}
 
         if self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -116,21 +120,40 @@ class EmbeddingExtractor:
         self,
         lon: float,
         lat: float,
-        transform
+        transform,
+        crs
     ) -> Tuple[int, int]:
         """
         Convert lon/lat to pixel coordinates using affine transform.
 
         Args:
-            lon: Longitude
-            lat: Latitude
+            lon: Longitude (WGS84)
+            lat: Latitude (WGS84)
             transform: Rasterio affine transform
+            crs: Target CRS of the raster
 
         Returns:
             (row, col) pixel indices
         """
-        # Inverse transform: (lon, lat) -> (col, row)
-        col, row = ~transform * (lon, lat)
+        # Get CRS code as string
+        crs_str = str(crs)
+
+        # Get or create transformer from WGS84 to tile CRS
+        if crs_str not in self.transformer_cache:
+            self.transformer_cache[crs_str] = Transformer.from_crs(
+                "EPSG:4326",  # WGS84 (lon/lat)
+                crs,          # Tile CRS (e.g., UTM)
+                always_xy=True
+            )
+
+        transformer = self.transformer_cache[crs_str]
+
+        # Transform lon/lat to tile CRS coordinates
+        x, y = transformer.transform(lon, lat)
+
+        # Apply inverse affine transform: (x, y) -> (col, row)
+        col, row = ~transform * (x, y)
+
         return int(row), int(col)
 
     def extract_patch(
@@ -160,7 +183,7 @@ class EmbeddingExtractor:
 
         # Convert to pixel coordinates
         try:
-            row, col = self._lonlat_to_pixel(lon, lat, transform)
+            row, col = self._lonlat_to_pixel(lon, lat, transform, crs)
         except Exception as e:
             print(f"Warning: Could not convert coordinates ({lon}, {lat}): {e}")
             return None
