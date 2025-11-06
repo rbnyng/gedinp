@@ -47,7 +47,7 @@ class GEDIQuerier:
     def query_bbox(
         self,
         bbox: tuple,
-        start_time: str = "2019-01-01",
+        start_time: str = "2023-01-01",
         end_time: str = "2023-12-31",
         variables: Optional[List[str]] = None,
         quality_filter: bool = True,
@@ -71,10 +71,7 @@ class GEDIQuerier:
         """
         if variables is None:
             variables = [
-                "lat_lowestmode", "lon_lowestmode",  # Coordinates
                 "agbd",  # Aboveground biomass density
-                "l4_quality_flag", "sensitivity",  # Quality metrics
-                "shot_number", "beam"  # Identifiers
             ]
  
         # Create bbox geometry as GeoDataFrame (required by gediDB)
@@ -93,17 +90,6 @@ class GEDIQuerier:
  
         # Convert to DataFrame
         df = gedi_data.to_dataframe().reset_index()
- 
-        # Rename coordinates to standard names for consistency
-        df = df.rename(columns={
-            'lat_lowestmode': 'latitude',
-            'lon_lowestmode': 'longitude'
-        })
-
-        # Apply quality filtering
-        if quality_filter and 'l4_quality_flag' in df.columns:
-            # Keep only high quality shots (flag == 1 typically indicates good quality)
-            df = df[df['l4_quality_flag'] == 1]
 
         # Filter by AGBD range
         df = df[df['agbd'] >= min_agbd]
