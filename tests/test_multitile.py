@@ -299,8 +299,8 @@ def test_4_dataset_creation(train_df, val_df, test_df):
                 # Test sampling
                 sample = dataset[0]
                 print(f"  Sample keys: {list(sample.keys())}")
-                print(f"  Context points: {sample['context_x'].shape[0]}")
-                print(f"  Target points: {sample['target_x'].shape[0]}")
+                print(f"  Context points: {sample['context_coords'].shape[0]}")
+                print(f"  Target points: {sample['target_coords'].shape[0]}")
  
                 datasets[split_name] = dataset
             else:
