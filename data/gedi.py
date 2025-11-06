@@ -142,6 +142,11 @@ class GEDIQuerier:
 
             logger.info(f"Retrieved {len(df)} shots before filtering")
 
+            # Handle empty results gracefully
+            if len(df) == 0:
+                logger.info("No data found, returning empty DataFrame")
+                return pd.DataFrame()
+
             # Filter by AGBD range
             if 'agbd' in df.columns:
                 df = df[df['agbd'] >= min_agbd]
