@@ -277,7 +277,7 @@ def collate_convcnp(batch: List[Optional[Dict]]) -> Optional[Dict[str, torch.Ten
     """
     Collate function for ConvCNP dataset.
 
-    Filters out None samples and stacks tensors.
+    Filters out None samples and stacks tensors with padding to handle variable sizes.
     """
     # Filter out None samples
     batch = [b for b in batch if b is not None]
@@ -285,11 +285,25 @@ def collate_convcnp(batch: List[Optional[Dict]]) -> Optional[Dict[str, torch.Ten
     if len(batch) == 0:
         return None
 
-    # Stack tensors
+    # Find maximum spatial dimensions in the batch
+    max_h = max(b['tile_embedding'].shape[1] for b in batch)
+    max_w = max(b['tile_embedding'].shape[2] for b in batch)
+
+    # Pad each sample to the maximum dimensions
+    def pad_to_size(tensor, target_h, target_w):
+        """Pad tensor to target spatial dimensions (H, W)."""
+        # tensor shape: (C, H, W) or (1, H, W)
+        c, h, w = tensor.shape
+        pad_h = target_h - h
+        pad_w = target_w - w
+        # pad: (left, right, top, bottom)
+        return torch.nn.functional.pad(tensor, (0, pad_w, 0, pad_h), mode='constant', value=0)
+
+    # Pad and stack tensors
     return {
-        'tile_embedding': torch.stack([b['tile_embedding'] for b in batch]),
-        'context_agbd': torch.stack([b['context_agbd'] for b in batch]),
-        'context_mask': torch.stack([b['context_mask'] for b in batch]),
-        'target_agbd': torch.stack([b['target_agbd'] for b in batch]),
-        'target_mask': torch.stack([b['target_mask'] for b in batch]),
+        'tile_embedding': torch.stack([pad_to_size(b['tile_embedding'], max_h, max_w) for b in batch]),
+        'context_agbd': torch.stack([pad_to_size(b['context_agbd'], max_h, max_w) for b in batch]),
+        'context_mask': torch.stack([pad_to_size(b['context_mask'], max_h, max_w) for b in batch]),
+        'target_agbd': torch.stack([pad_to_size(b['target_agbd'], max_h, max_w) for b in batch]),
+        'target_mask': torch.stack([pad_to_size(b['target_mask'], max_h, max_w) for b in batch]),
     }
