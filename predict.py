@@ -34,23 +34,23 @@ def parse_args():
     # Prediction region arguments
     parser.add_argument('--tile_bbox', type=float, nargs=4, required=True,
                         help='Tile bounding box: min_lon min_lat max_lon max_lat')
-    parser.add_argument('--grid_resolution', type=float, default=0.001,
-                        help='Spatial resolution for prediction grid (degrees, default: 0.001 ≈ 100m)')
+    parser.add_argument('--grid_resolution', type=float, default=0.0001,
+                        help='Spatial resolution for prediction grid (degrees, default: 0.0001 ≈ 10m)')
 
     # Context arguments
     parser.add_argument('--context_radius', type=float, default=0.2,
                         help='Radius around tile to query GEDI context shots (degrees)')
     parser.add_argument('--use_train_only', action='store_true',
                         help='Use only training GEDI shots (requires train_split.csv)')
-    parser.add_argument('--start_time', type=str, default='2019-01-01',
+    parser.add_argument('--start_time', type=str, default='2022-01-01',
                         help='Start date for GEDI data (YYYY-MM-DD)')
-    parser.add_argument('--end_time', type=str, default='2023-12-31',
+    parser.add_argument('--end_time', type=str, default='2022-12-31',
                         help='End date for GEDI data (YYYY-MM-DD)')
 
     # Inference arguments
     parser.add_argument('--batch_size', type=int, default=1000,
                         help='Batch size for inference (number of query points)')
-    parser.add_argument('--embedding_year', type=int, default=2024,
+    parser.add_argument('--embedding_year', type=int, default=2022,
                         help='Year of GeoTessera embeddings')
     parser.add_argument('--cache_dir', type=str, default='./cache',
                         help='Directory for caching embeddings')
@@ -103,7 +103,7 @@ def load_model_and_config(checkpoint_path: str, config_path: str = None, device:
     )
 
     # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
     model.eval()
