@@ -25,13 +25,24 @@ class EmbeddingEncoder(nn.Module):
         """
         super().__init__()
 
-        # CNN to process spatial structure of embedding patch
+        # Deeper CNN to process spatial structure of embedding patch
         self.conv1 = nn.Conv2d(in_channels, hidden_dim, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(hidden_dim)
         self.conv2 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(hidden_dim)
+        self.conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(hidden_dim)
+
+        # Residual connection for first block
+        self.residual_proj = nn.Conv2d(in_channels, hidden_dim, kernel_size=1)
 
         # Global pooling and projection
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
 
     def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
         """
@@ -46,9 +57,13 @@ class EmbeddingEncoder(nn.Module):
         # Reshape to (batch, channels, height, width)
         x = embeddings.permute(0, 3, 1, 2)
 
-        # CNN layers
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
+        # First block with residual
+        identity = self.residual_proj(x)
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)) + identity)
+
+        # Third conv layer
+        x = F.relu(self.bn3(self.conv3(x)) + x)
 
         # Global pooling
         x = self.pool(x).squeeze(-1).squeeze(-1)
@@ -82,13 +97,13 @@ class ContextEncoder(nn.Module):
 
         input_dim = coord_dim + embedding_dim + 1  # coords + embedding + agbd
 
-        self.mlp = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
-        )
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.ln1 = nn.LayerNorm(hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.ln2 = nn.LayerNorm(hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
+        self.ln3 = nn.LayerNorm(hidden_dim)
+        self.fc_out = nn.Linear(hidden_dim, output_dim)
 
     def forward(
         self,
@@ -108,7 +123,21 @@ class ContextEncoder(nn.Module):
             Representations (batch, output_dim)
         """
         x = torch.cat([coords, embedding_features, agbd], dim=-1)
-        return self.mlp(x)
+
+        # First layer
+        x = F.relu(self.ln1(self.fc1(x)))
+
+        # Second layer with residual
+        identity = x
+        x = F.relu(self.ln2(self.fc2(x)) + identity)
+
+        # Third layer with residual
+        x = F.relu(self.ln3(self.fc3(x)) + x)
+
+        # Output projection
+        x = self.fc_out(x)
+
+        return x
 
 
 class Decoder(nn.Module):
@@ -137,12 +166,12 @@ class Decoder(nn.Module):
         self.output_uncertainty = output_uncertainty
         input_dim = coord_dim + embedding_dim + context_dim
 
-        self.mlp = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-        )
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.ln1 = nn.LayerNorm(hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.ln2 = nn.LayerNorm(hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
+        self.ln3 = nn.LayerNorm(hidden_dim)
 
         # Output heads
         self.mean_head = nn.Linear(hidden_dim, 1)
@@ -168,7 +197,16 @@ class Decoder(nn.Module):
             (mean, log_variance) predictions, where log_variance is None if not output_uncertainty
         """
         x = torch.cat([query_coords, query_embedding_features, context_repr], dim=-1)
-        x = self.mlp(x)
+
+        # First layer
+        x = F.relu(self.ln1(self.fc1(x)))
+
+        # Second layer with residual
+        identity = x
+        x = F.relu(self.ln2(self.fc2(x)) + identity)
+
+        # Third layer with residual
+        x = F.relu(self.ln3(self.fc3(x)) + x)
 
         mean = self.mean_head(x)
 
@@ -182,6 +220,63 @@ class Decoder(nn.Module):
             return mean, None
 
 
+class AttentionAggregator(nn.Module):
+    """Attention-based aggregation of context representations."""
+
+    def __init__(
+        self,
+        dim: int = 128,
+        num_heads: int = 4,
+        dropout: float = 0.1
+    ):
+        """
+        Initialize attention aggregator.
+
+        Args:
+            dim: Feature dimension
+            num_heads: Number of attention heads
+            dropout: Dropout rate
+        """
+        super().__init__()
+
+        self.attention = nn.MultiheadAttention(
+            dim,
+            num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.norm = nn.LayerNorm(dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        query_repr: torch.Tensor,
+        context_repr: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Aggregate context using attention.
+
+        Args:
+            query_repr: Query representations (n_query, dim)
+            context_repr: Context representations (n_context, dim)
+
+        Returns:
+            Aggregated context for each query (n_query, dim)
+        """
+        # Expand dimensions for batch processing
+        query = query_repr.unsqueeze(0)  # (1, n_query, dim)
+        context = context_repr.unsqueeze(0)  # (1, n_context, dim)
+
+        # Apply cross-attention
+        attended, _ = self.attention(query, context, context)
+
+        # Apply dropout and residual connection
+        attended = self.dropout(attended)
+        output = self.norm(attended.squeeze(0) + query_repr)
+
+        return output
+
+
 class GEDINeuralProcess(nn.Module):
     """
     Neural Process for GEDI AGB interpolation with foundation model embeddings.
@@ -189,7 +284,7 @@ class GEDINeuralProcess(nn.Module):
     Architecture:
     1. Encode embedding patches to feature vectors
     2. Encode context points (coord + embedding feature + agbd)
-    3. Aggregate context representations (mean pooling)
+    3. Aggregate context representations with attention mechanism
     4. Decode query points to AGBD predictions with uncertainty
     """
 
@@ -200,7 +295,9 @@ class GEDINeuralProcess(nn.Module):
         embedding_feature_dim: int = 128,
         context_repr_dim: int = 128,
         hidden_dim: int = 256,
-        output_uncertainty: bool = True
+        output_uncertainty: bool = True,
+        use_attention: bool = True,
+        num_attention_heads: int = 4
     ):
         """
         Initialize Neural Process.
@@ -212,10 +309,13 @@ class GEDINeuralProcess(nn.Module):
             context_repr_dim: Dimension of context representations
             hidden_dim: Hidden layer dimension
             output_uncertainty: Whether to predict uncertainty
+            use_attention: Use attention for context aggregation (vs mean pooling)
+            num_attention_heads: Number of attention heads
         """
         super().__init__()
 
         self.output_uncertainty = output_uncertainty
+        self.use_attention = use_attention
 
         # Embedding encoder (shared for context and query)
         self.embedding_encoder = EmbeddingEncoder(
@@ -232,6 +332,15 @@ class GEDINeuralProcess(nn.Module):
             hidden_dim=hidden_dim,
             output_dim=context_repr_dim
         )
+
+        # Attention aggregator (optional)
+        if use_attention:
+            self.attention_aggregator = AttentionAggregator(
+                dim=context_repr_dim,
+                num_heads=num_attention_heads
+            )
+            # Query projection for attention (coord + embedding -> context_repr_dim)
+            self.query_proj = nn.Linear(2 + embedding_feature_dim, context_repr_dim)
 
         # Decoder
         self.decoder = Decoder(
@@ -275,11 +384,25 @@ class GEDINeuralProcess(nn.Module):
             context_agbd
         )
 
-        # Aggregate context (mean pooling)
-        aggregated_context = context_repr.mean(dim=0, keepdim=True)
+        # Aggregate context
+        if self.use_attention:
+            # Create query representations for attention
+            # Use query coords + embeddings as query features
+            query_repr = torch.cat([query_coords, query_emb_features], dim=-1)
 
-        # Expand to match query batch size
-        aggregated_context = aggregated_context.expand(query_coords.shape[0], -1)
+            # Project to context dimension
+            query_repr_projected = self.query_proj(query_repr)
+
+            # Use attention to aggregate context
+            aggregated_context = self.attention_aggregator(
+                query_repr_projected,
+                context_repr
+            )
+        else:
+            # Mean pooling (original method)
+            aggregated_context = context_repr.mean(dim=0, keepdim=True)
+            # Expand to match query batch size
+            aggregated_context = aggregated_context.expand(query_coords.shape[0], -1)
 
         # Decode query points
         pred_mean, pred_log_var = self.decoder(

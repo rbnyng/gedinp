@@ -23,10 +23,13 @@ class GEDINeuralProcessDataset(Dataset):
         data_df: pd.DataFrame,
         min_shots_per_tile: int = 10,
         max_shots_per_tile: Optional[int] = None,
-        context_ratio_range: Tuple[float, float] = (0.1, 0.9),
+        context_ratio_range: Tuple[float, float] = (0.3, 0.7),
         normalize_coords: bool = True,
         normalize_agbd: bool = True,
-        agbd_scale: float = 200.0  # Typical max AGBD in Mg/ha
+        agbd_scale: float = 200.0,  # Typical max AGBD in Mg/ha
+        log_transform_agbd: bool = True,
+        augment_coords: bool = True,
+        coord_noise_std: float = 0.01
     ):
         """
         Initialize dataset.
@@ -39,6 +42,9 @@ class GEDINeuralProcessDataset(Dataset):
             normalize_coords: Normalize coordinates to [0, 1] within each tile
             normalize_agbd: Normalize AGBD values
             agbd_scale: Scale factor for AGBD normalization
+            log_transform_agbd: Apply log(1+x) transform to AGBD
+            augment_coords: Add small random noise to coordinates during training
+            coord_noise_std: Standard deviation of coordinate noise
         """
         # Filter out shots without embeddings
         self.data_df = data_df[data_df['embedding_patch'].notna()].copy()
@@ -58,6 +64,9 @@ class GEDINeuralProcessDataset(Dataset):
         self.normalize_coords = normalize_coords
         self.normalize_agbd = normalize_agbd
         self.agbd_scale = agbd_scale
+        self.log_transform_agbd = log_transform_agbd
+        self.augment_coords = augment_coords
+        self.coord_noise_std = coord_noise_std
 
         print(f"Dataset initialized with {len(self.tiles)} tiles")
         if len(self.tiles) > 0:
@@ -125,12 +134,24 @@ class GEDINeuralProcessDataset(Dataset):
         embeddings = np.stack(tile_data['embedding_patch'].values)  # (N, H, W, C)
         agbd = tile_data['agbd'].values[:, None]  # (N, 1)
 
-        # Normalize
+        # Normalize coordinates
         if self.normalize_coords:
             coords = self._normalize_coordinates(coords, tile_data)
 
+        # Apply coordinate augmentation (small random noise)
+        if self.augment_coords:
+            coords = coords + np.random.normal(0, self.coord_noise_std, coords.shape)
+            # Clip to stay in valid range
+            coords = np.clip(coords, 0, 1)
+
+        # Normalize AGBD
         if self.normalize_agbd:
-            agbd = agbd / self.agbd_scale
+            if self.log_transform_agbd:
+                # Log transform then normalize
+                agbd = np.log1p(agbd) / np.log1p(self.agbd_scale)
+            else:
+                # Direct normalization
+                agbd = agbd / self.agbd_scale
 
         # Split context/target
         context_coords = coords[context_indices]
@@ -189,7 +210,8 @@ class GEDIInferenceDataset(Dataset):
         query_embeddings: np.ndarray,
         normalize_coords: bool = True,
         normalize_agbd: bool = True,
-        agbd_scale: float = 200.0
+        agbd_scale: float = 200.0,
+        log_transform_agbd: bool = True
     ):
         """
         Initialize inference dataset.
@@ -202,6 +224,7 @@ class GEDIInferenceDataset(Dataset):
             normalize_coords: Normalize coordinates
             normalize_agbd: Normalize AGBD
             agbd_scale: AGBD scale factor
+            log_transform_agbd: Apply log transform to AGBD
         """
         self.context_df = context_df[context_df['embedding_patch'].notna()].copy()
         self.query_lons = query_lons
@@ -211,6 +234,7 @@ class GEDIInferenceDataset(Dataset):
         self.normalize_coords = normalize_coords
         self.normalize_agbd = normalize_agbd
         self.agbd_scale = agbd_scale
+        self.log_transform_agbd = log_transform_agbd
 
         # Prepare context data
         self.context_coords = self.context_df[['longitude', 'latitude']].values
@@ -219,7 +243,10 @@ class GEDIInferenceDataset(Dataset):
 
         # Normalize context
         if self.normalize_agbd:
-            self.context_agbd = self.context_agbd / self.agbd_scale
+            if self.log_transform_agbd:
+                self.context_agbd = np.log1p(self.context_agbd) / np.log1p(self.agbd_scale)
+            else:
+                self.context_agbd = self.context_agbd / self.agbd_scale
 
     def __len__(self) -> int:
         return len(self.query_lons)

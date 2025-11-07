@@ -43,17 +43,21 @@ def parse_args():
     # Model arguments
     parser.add_argument('--patch_size', type=int, default=3,
                         help='Embedding patch size (default: 3x3)')
-    parser.add_argument('--hidden_dim', type=int, default=256,
+    parser.add_argument('--hidden_dim', type=int, default=512,
                         help='Hidden layer dimension')
     parser.add_argument('--embedding_feature_dim', type=int, default=128,
                         help='Embedding feature dimension')
     parser.add_argument('--context_repr_dim', type=int, default=128,
                         help='Context representation dimension')
+    parser.add_argument('--use_attention', action='store_true', default=True,
+                        help='Use attention for context aggregation')
+    parser.add_argument('--num_attention_heads', type=int, default=4,
+                        help='Number of attention heads')
 
     # Training arguments
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=16,
                         help='Batch size (number of tiles)')
-    parser.add_argument('--lr', type=float, default=1e-4,
+    parser.add_argument('--lr', type=float, default=5e-4,
                         help='Learning rate')
     parser.add_argument('--epochs', type=int, default=100,
                         help='Number of epochs')
@@ -63,12 +67,20 @@ def parse_args():
                         help='Test set ratio')
     parser.add_argument('--min_shots_per_tile', type=int, default=10,
                         help='Minimum GEDI shots per tile')
-    parser.add_argument('--early_stopping_patience', type=int, default=10,
+    parser.add_argument('--early_stopping_patience', type=int, default=15,
                         help='Early stopping patience (epochs)')
     parser.add_argument('--lr_scheduler_patience', type=int, default=5,
                         help='LR scheduler patience (epochs)')
     parser.add_argument('--lr_scheduler_factor', type=float, default=0.5,
                         help='LR scheduler reduction factor')
+
+    # Dataset arguments
+    parser.add_argument('--log_transform_agbd', action='store_true', default=True,
+                        help='Apply log transform to AGBD')
+    parser.add_argument('--augment_coords', action='store_true', default=True,
+                        help='Add coordinate augmentation')
+    parser.add_argument('--coord_noise_std', type=float, default=0.01,
+                        help='Standard deviation for coordinate noise')
 
     # Output arguments
     parser.add_argument('--output_dir', type=str, default='./outputs',
@@ -298,11 +310,17 @@ def main():
     print("Step 4: Creating datasets...")
     train_dataset = GEDINeuralProcessDataset(
         train_df,
-        min_shots_per_tile=args.min_shots_per_tile
+        min_shots_per_tile=args.min_shots_per_tile,
+        log_transform_agbd=args.log_transform_agbd,
+        augment_coords=args.augment_coords,
+        coord_noise_std=args.coord_noise_std
     )
     val_dataset = GEDINeuralProcessDataset(
         val_df,
-        min_shots_per_tile=args.min_shots_per_tile
+        min_shots_per_tile=args.min_shots_per_tile,
+        log_transform_agbd=args.log_transform_agbd,
+        augment_coords=False,  # No augmentation for validation
+        coord_noise_std=0.0
     )
 
     train_loader = DataLoader(
@@ -329,7 +347,9 @@ def main():
         embedding_feature_dim=args.embedding_feature_dim,
         context_repr_dim=args.context_repr_dim,
         hidden_dim=args.hidden_dim,
-        output_uncertainty=True
+        output_uncertainty=True,
+        use_attention=args.use_attention,
+        num_attention_heads=args.num_attention_heads
     ).to(args.device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
