@@ -67,7 +67,7 @@ def plot_learning_curves(history_path, output_path):
 
 def plot_spatial_splits(train_csv, val_csv, test_csv, output_path):
     """
-    Visualize spatial distribution of train/val/test tiles.
+    Visualize spatial distribution of train/val/test GEDI shots.
 
     Args:
         train_csv: Path to train_split.csv
@@ -80,7 +80,7 @@ def plot_spatial_splits(train_csv, val_csv, test_csv, output_path):
     val_df = pd.read_csv(val_csv)
     test_df = pd.read_csv(test_csv)
 
-    # Get unique tiles with their bounds
+    # Get tile statistics
     def get_tile_info(df, split_name):
         tiles = []
         for tile_id in df['tile_id'].unique():
@@ -88,10 +88,6 @@ def plot_spatial_splits(train_csv, val_csv, test_csv, output_path):
             tiles.append({
                 'tile_id': tile_id,
                 'split': split_name,
-                'min_lon': tile_data['longitude'].min(),
-                'max_lon': tile_data['longitude'].max(),
-                'min_lat': tile_data['latitude'].min(),
-                'max_lat': tile_data['latitude'].max(),
                 'n_shots': len(tile_data)
             })
         return tiles
@@ -100,51 +96,30 @@ def plot_spatial_splits(train_csv, val_csv, test_csv, output_path):
     val_tiles = get_tile_info(val_df, 'val')
     test_tiles = get_tile_info(test_df, 'test')
 
-    all_tiles = train_tiles + val_tiles + test_tiles
-
     # Create figure
     fig = plt.figure(figsize=(14, 6))
     gs = gridspec.GridSpec(1, 2, width_ratios=[2, 1])
 
-    # Left panel: Spatial map
+    # Left panel: Spatial map - scatter plot of GEDI shots
     ax1 = plt.subplot(gs[0])
 
     colors = {'train': '#1f77b4', 'val': '#ff7f0e', 'test': '#2ca02c'}
 
-    for tiles, split_name in [(train_tiles, 'train'), (val_tiles, 'val'), (test_tiles, 'test')]:
-        for tile in tiles:
-            width = tile['max_lon'] - tile['min_lon']
-            height = tile['max_lat'] - tile['min_lat']
-            rect = Rectangle(
-                (tile['min_lon'], tile['min_lat']),
-                width, height,
-                linewidth=1,
-                edgecolor='black',
-                facecolor=colors[split_name],
-                alpha=0.6,
-                label=split_name if tile == tiles[0] else ""
-            )
-            ax1.add_patch(rect)
-
-    # Set axis limits based on tile bounds
-    if all_tiles:
-        all_lons = [tile['min_lon'] for tile in all_tiles] + [tile['max_lon'] for tile in all_tiles]
-        all_lats = [tile['min_lat'] for tile in all_tiles] + [tile['max_lat'] for tile in all_tiles]
-        lon_margin = (max(all_lons) - min(all_lons)) * 0.05  # 5% margin
-        lat_margin = (max(all_lats) - min(all_lats)) * 0.05
-        ax1.set_xlim(min(all_lons) - lon_margin, max(all_lons) + lon_margin)
-        ax1.set_ylim(min(all_lats) - lat_margin, max(all_lats) + lat_margin)
+    # Plot each split as scatter points
+    for df, split_name in [(train_df, 'train'), (val_df, 'val'), (test_df, 'test')]:
+        ax1.scatter(df['longitude'], df['latitude'],
+                   c=colors[split_name],
+                   alpha=0.5,
+                   s=10,
+                   label=split_name.upper(),
+                   edgecolors='none')
 
     ax1.set_xlabel('Longitude', fontsize=12, fontweight='bold')
     ax1.set_ylabel('Latitude', fontsize=12, fontweight='bold')
-    ax1.set_title('Spatial Distribution of Tiles', fontsize=14, fontweight='bold')
+    ax1.set_title('Spatial Distribution of GEDI Shots', fontsize=14, fontweight='bold')
     ax1.set_aspect('equal', adjustable='box')
     ax1.grid(True, alpha=0.3)
-
-    # Remove duplicate labels
-    handles, labels = ax1.get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    ax1.legend(by_label.values(), by_label.keys(), loc='best', fontsize=10)
+    ax1.legend(loc='best', fontsize=10)
 
     # Right panel: Statistics
     ax2 = plt.subplot(gs[1])
