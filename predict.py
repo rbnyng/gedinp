@@ -274,7 +274,7 @@ def extract_embeddings(
           f"({100*len(patches)/len(coords_df):.1f}%)")
 
     # Filter to valid only
-    result_df = coords_df.iloc[valid_indices].copy()
+    result_df = coords_df.loc[valid_indices].copy()
     result_df['embedding_patch'] = patches
 
     return result_df
