@@ -562,7 +562,7 @@ def create_visualization(
         origin='lower',
         cmap='YlGn',
         vmin=0,
-        vmax=min(200, np.percentile(predictions, 99))
+        vmax=min(200, np.nanpercentile(predictions, 99))
     )
 
     # Overlay context points
@@ -593,7 +593,7 @@ def create_visualization(
         origin='lower',
         cmap='Reds',
         vmin=0,
-        vmax=np.percentile(uncertainties, 95)
+        vmax=np.nanpercentile(uncertainties, 95)
     )
 
     # Overlay context points
@@ -620,8 +620,8 @@ def create_visualization(
     min_lon, min_lat, max_lon, max_lat = region_bbox
     stats_text = (
         f"Region: [{min_lon:.3f}, {min_lat:.3f}] to [{max_lon:.3f}, {max_lat:.3f}]\n"
-        f"Mean AGB: {predictions.mean():.1f} ± {predictions.std():.1f} Mg/ha\n"
-        f"Mean Uncertainty: {uncertainties.mean():.1f} Mg/ha\n"
+        f"Mean AGB: {np.nanmean(predictions):.1f} ± {np.nanstd(predictions):.1f} Mg/ha\n"
+        f"Mean Uncertainty: {np.nanmean(uncertainties):.1f} Mg/ha\n"
         f"Grid size: {n_rows} × {n_cols}"
     )
 
@@ -773,8 +773,8 @@ def main():
     # Step 10: Generate visualization (unless disabled)
     if not args.no_preview:
         create_visualization(
-            predictions,
-            uncertainties,
+            full_predictions,
+            full_uncertainties,
             lons, lats,
             context_df,
             output_dir / f"{region_name}_preview.png",
