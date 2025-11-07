@@ -546,7 +546,7 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
                 num_attention_heads=config.get('num_attention_heads', 4)
             ).to(device)
 
-            checkpoint = torch.load(model_dir / 'best_r2_model.pt', map_location=device)
+            checkpoint = torch.load(model_dir / 'best_r2_model.pt', map_location=device, weights_only=False)
             model.load_state_dict(checkpoint['model_state_dict'])
         else:
             print("  ⚠ processed_data.pkl not found, cannot load validation data")
