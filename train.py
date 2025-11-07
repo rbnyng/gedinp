@@ -23,6 +23,7 @@ from models.neural_process import (
     neural_process_loss,
     compute_metrics
 )
+from diagnostics import generate_all_diagnostics
 
 
 def parse_args():
@@ -95,6 +96,10 @@ def parse_args():
                         help='Output directory for models and logs')
     parser.add_argument('--save_every', type=int, default=10,
                         help='Save checkpoint every N epochs')
+    parser.add_argument('--generate_diagnostics', action='store_true', default=True,
+                        help='Generate diagnostic plots after training (default: True)')
+    parser.add_argument('--n_diagnostic_samples', type=int, default=5,
+                        help='Number of sample tiles to plot in diagnostics')
 
     # Other
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
@@ -524,6 +529,19 @@ def main():
     print(f"Best R² score: {best_r2:.4f}")
     print(f"Models saved to: {output_dir}")
     print("=" * 80)
+
+    # Generate post-training diagnostics
+    if args.generate_diagnostics:
+        print("\nGenerating post-training diagnostics...")
+        try:
+            generate_all_diagnostics(
+                model_dir=output_dir,
+                device=args.device,
+                n_sample_plots=args.n_diagnostic_samples
+            )
+        except Exception as e:
+            print(f"Warning: Failed to generate diagnostics: {e}")
+            print("Training completed successfully, but diagnostics could not be generated.")
 
 
 if __name__ == '__main__':
