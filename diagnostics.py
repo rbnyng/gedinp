@@ -9,6 +9,7 @@ This module generates comprehensive diagnostic plots after training:
 """
 
 import json
+import pickle
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -503,52 +504,65 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
 
     # 3. Sample predictions (on validation set)
     print("\n[3/4] Generating sample predictions...")
-    if (model_dir / 'val_split.csv').exists() and (model_dir / 'best_r2_model.pt').exists():
-        # Load validation data
-        val_df = pd.read_csv(model_dir / 'val_split.csv')
 
-        # Convert embedding_patch from string back to array if needed
-        if 'embedding_patch' in val_df.columns and isinstance(val_df['embedding_patch'].iloc[0], str):
-            val_df['embedding_patch'] = val_df['embedding_patch'].apply(
-                lambda x: np.array(eval(x)) if isinstance(x, str) else x
+    # Load validation data and model (used by both sections 3 and 4)
+    model = None
+    val_dataset = None
+
+    if (model_dir / 'val_split.csv').exists() and (model_dir / 'best_r2_model.pt').exists():
+        # Load validation data from pickle (preserves numpy arrays properly)
+        # The CSV files contain truncated string representations that can't be parsed
+        if (model_dir / 'processed_data.pkl').exists():
+            with open(model_dir / 'processed_data.pkl', 'rb') as f:
+                full_data = pickle.load(f)
+
+            # Load val split CSV just to get the tile IDs
+            val_split_info = pd.read_csv(model_dir / 'val_split.csv')
+            val_tile_ids = val_split_info['tile_id'].unique()
+
+            # Filter full data to validation tiles
+            val_df = full_data[full_data['tile_id'].isin(val_tile_ids)].copy()
+
+            global_bounds = tuple(config['global_bounds'])
+            val_dataset = GEDINeuralProcessDataset(
+                val_df,
+                min_shots_per_tile=config.get('min_shots_per_tile', 10),
+                log_transform_agbd=config.get('log_transform_agbd', True),
+                augment_coords=False,
+                coord_noise_std=0.0,
+                global_bounds=global_bounds
             )
 
-        global_bounds = tuple(config['global_bounds'])
-        val_dataset = GEDINeuralProcessDataset(
-            val_df,
-            min_shots_per_tile=config.get('min_shots_per_tile', 10),
-            log_transform_agbd=config.get('log_transform_agbd', True),
-            augment_coords=False,
-            coord_noise_std=0.0,
-            global_bounds=global_bounds
-        )
+            # Load model
+            model = GEDINeuralProcess(
+                patch_size=config.get('patch_size', 3),
+                embedding_channels=128,
+                embedding_feature_dim=config.get('embedding_feature_dim', 128),
+                context_repr_dim=config.get('context_repr_dim', 128),
+                hidden_dim=config.get('hidden_dim', 512),
+                latent_dim=config.get('latent_dim', 128),
+                output_uncertainty=True,
+                architecture_mode=config.get('architecture_mode', 'deterministic'),
+                num_attention_heads=config.get('num_attention_heads', 4)
+            ).to(device)
 
-        # Load model
-        model = GEDINeuralProcess(
-            patch_size=config.get('patch_size', 3),
-            embedding_channels=128,
-            embedding_feature_dim=config.get('embedding_feature_dim', 128),
-            context_repr_dim=config.get('context_repr_dim', 128),
-            hidden_dim=config.get('hidden_dim', 512),
-            latent_dim=config.get('latent_dim', 128),
-            output_uncertainty=True,
-            architecture_mode=config.get('architecture_mode', 'deterministic'),
-            num_attention_heads=config.get('num_attention_heads', 4)
-        ).to(device)
+            checkpoint = torch.load(model_dir / 'best_r2_model.pt', map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            print("  ⚠ processed_data.pkl not found, cannot load validation data")
+    else:
+        print("  ⚠ Required files not found, skipping")
 
-        checkpoint = torch.load(model_dir / 'best_r2_model.pt', map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-
+    # Generate sample predictions if model and dataset are loaded
+    if model is not None and val_dataset is not None:
         plot_sample_predictions(
             model, val_dataset, device, n_samples=n_sample_plots,
             output_path=model_dir / 'diagnostics_sample_predictions.png'
         )
-    else:
-        print("  ⚠ Required files not found, skipping")
 
     # 4. Uncertainty calibration
     print("\n[4/4] Analyzing uncertainty calibration...")
-    if (model_dir / 'val_split.csv').exists() and (model_dir / 'best_r2_model.pt').exists():
+    if model is not None and val_dataset is not None:
         plot_uncertainty_calibration(
             model, val_dataset, device,
             output_path=model_dir / 'diagnostics_uncertainty_calibration.png'
