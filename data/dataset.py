@@ -29,7 +29,8 @@ class GEDINeuralProcessDataset(Dataset):
         agbd_scale: float = 200.0,  # Typical max AGBD in Mg/ha
         log_transform_agbd: bool = True,
         augment_coords: bool = True,
-        coord_noise_std: float = 0.01
+        coord_noise_std: float = 0.01,
+        global_bounds: Optional[Tuple[float, float, float, float]] = None
     ):
         """
         Initialize dataset.
@@ -39,12 +40,15 @@ class GEDINeuralProcessDataset(Dataset):
             min_shots_per_tile: Minimum number of shots per tile to include
             max_shots_per_tile: Maximum shots per tile (subsample if exceeded)
             context_ratio_range: Range of context/total ratios for training (min, max)
-            normalize_coords: Normalize coordinates to [0, 1] within each tile
+            normalize_coords: Normalize coordinates to [0, 1] using global bounds
             normalize_agbd: Normalize AGBD values
             agbd_scale: Scale factor for AGBD normalization
             log_transform_agbd: Apply log(1+x) transform to AGBD
             augment_coords: Add small random noise to coordinates during training
             coord_noise_std: Standard deviation of coordinate noise
+            global_bounds: Global coordinate bounds (lon_min, lat_min, lon_max, lat_max).
+                          If None, computed from data_df. Should be computed from training
+                          data and shared across train/val/test for proper normalization.
         """
         # Filter out shots without embeddings
         self.data_df = data_df[data_df['embedding_patch'].notna()].copy()
@@ -68,6 +72,17 @@ class GEDINeuralProcessDataset(Dataset):
         self.augment_coords = augment_coords
         self.coord_noise_std = coord_noise_std
 
+        # Store global bounds for normalization
+        if global_bounds is None:
+            # Compute from data_df
+            self.lon_min = self.data_df['longitude'].min()
+            self.lon_max = self.data_df['longitude'].max()
+            self.lat_min = self.data_df['latitude'].min()
+            self.lat_max = self.data_df['latitude'].max()
+        else:
+            # Use provided global bounds
+            self.lon_min, self.lat_min, self.lon_max, self.lat_max = global_bounds
+
         print(f"Dataset initialized with {len(self.tiles)} tiles")
         if len(self.tiles) > 0:
             shots_per_tile = [len(t) for t in self.tiles]
@@ -77,31 +92,26 @@ class GEDINeuralProcessDataset(Dataset):
     def __len__(self) -> int:
         return len(self.tiles)
 
-    def _normalize_coordinates(
-        self,
-        coords: np.ndarray,
-        tile_data: pd.DataFrame
-    ) -> np.ndarray:
+    def _normalize_coordinates(self, coords: np.ndarray) -> np.ndarray:
         """
-        Normalize coordinates to [0, 1] range within tile bounds.
+        Normalize coordinates to [0, 1] range using global bounds.
+
+        This ensures the model can learn latitude-dependent patterns (e.g., climate zones)
+        since coordinates are normalized consistently across all tiles.
 
         Args:
             coords: (N, 2) array of [lon, lat]
-            tile_data: DataFrame for the tile
 
         Returns:
             Normalized coordinates (N, 2)
         """
-        lon_min, lon_max = tile_data['longitude'].min(), tile_data['longitude'].max()
-        lat_min, lat_max = tile_data['latitude'].min(), tile_data['latitude'].max()
-
-        # Avoid division by zero for single point
-        lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
-        lat_range = lat_max - lat_min if lat_max > lat_min else 1.0
+        # Use global bounds for normalization
+        lon_range = self.lon_max - self.lon_min if self.lon_max > self.lon_min else 1.0
+        lat_range = self.lat_max - self.lat_min if self.lat_max > self.lat_min else 1.0
 
         normalized = coords.copy()
-        normalized[:, 0] = (coords[:, 0] - lon_min) / lon_range
-        normalized[:, 1] = (coords[:, 1] - lat_min) / lat_range
+        normalized[:, 0] = (coords[:, 0] - self.lon_min) / lon_range
+        normalized[:, 1] = (coords[:, 1] - self.lat_min) / lat_range
 
         return normalized
 
@@ -136,7 +146,7 @@ class GEDINeuralProcessDataset(Dataset):
 
         # Normalize coordinates
         if self.normalize_coords:
-            coords = self._normalize_coordinates(coords, tile_data)
+            coords = self._normalize_coordinates(coords)
 
         # Apply coordinate augmentation (small random noise)
         if self.augment_coords:
@@ -211,7 +221,8 @@ class GEDIInferenceDataset(Dataset):
         normalize_coords: bool = True,
         normalize_agbd: bool = True,
         agbd_scale: float = 200.0,
-        log_transform_agbd: bool = True
+        log_transform_agbd: bool = True,
+        global_bounds: Optional[Tuple[float, float, float, float]] = None
     ):
         """
         Initialize inference dataset.
@@ -225,6 +236,8 @@ class GEDIInferenceDataset(Dataset):
             normalize_agbd: Normalize AGBD
             agbd_scale: AGBD scale factor
             log_transform_agbd: Apply log transform to AGBD
+            global_bounds: Global coordinate bounds (lon_min, lat_min, lon_max, lat_max).
+                          If None, computed from context + query data.
         """
         self.context_df = context_df[context_df['embedding_patch'].notna()].copy()
         self.query_lons = query_lons
@@ -235,6 +248,19 @@ class GEDIInferenceDataset(Dataset):
         self.normalize_agbd = normalize_agbd
         self.agbd_scale = agbd_scale
         self.log_transform_agbd = log_transform_agbd
+
+        # Store global bounds for normalization
+        if global_bounds is None:
+            # Compute from context + query data
+            all_lons = np.concatenate([context_df['longitude'].values, query_lons])
+            all_lats = np.concatenate([context_df['latitude'].values, query_lats])
+            self.lon_min = all_lons.min()
+            self.lon_max = all_lons.max()
+            self.lat_min = all_lats.min()
+            self.lat_max = all_lats.max()
+        else:
+            # Use provided global bounds
+            self.lon_min, self.lat_min, self.lon_max, self.lat_max = global_bounds
 
         # Prepare context data
         self.context_coords = self.context_df[['longitude', 'latitude']].values
@@ -258,21 +284,17 @@ class GEDIInferenceDataset(Dataset):
 
         # Normalize if needed
         if self.normalize_coords:
-            # Normalize based on combined context + query extent
-            all_coords = np.vstack([self.context_coords, query_coord])
-            lon_min, lon_max = all_coords[:, 0].min(), all_coords[:, 0].max()
-            lat_min, lat_max = all_coords[:, 1].min(), all_coords[:, 1].max()
-
-            lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
-            lat_range = lat_max - lat_min if lat_max > lat_min else 1.0
+            # Use global bounds for normalization
+            lon_range = self.lon_max - self.lon_min if self.lon_max > self.lon_min else 1.0
+            lat_range = self.lat_max - self.lat_min if self.lat_max > self.lat_min else 1.0
 
             context_coords_norm = self.context_coords.copy()
-            context_coords_norm[:, 0] = (context_coords_norm[:, 0] - lon_min) / lon_range
-            context_coords_norm[:, 1] = (context_coords_norm[:, 1] - lat_min) / lat_range
+            context_coords_norm[:, 0] = (context_coords_norm[:, 0] - self.lon_min) / lon_range
+            context_coords_norm[:, 1] = (context_coords_norm[:, 1] - self.lat_min) / lat_range
 
             query_coord_norm = query_coord.copy()
-            query_coord_norm[:, 0] = (query_coord_norm[:, 0] - lon_min) / lon_range
-            query_coord_norm[:, 1] = (query_coord_norm[:, 1] - lat_min) / lat_range
+            query_coord_norm[:, 0] = (query_coord_norm[:, 0] - self.lon_min) / lon_range
+            query_coord_norm[:, 1] = (query_coord_norm[:, 1] - self.lat_min) / lat_range
         else:
             context_coords_norm = self.context_coords
             query_coord_norm = query_coord
