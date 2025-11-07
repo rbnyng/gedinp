@@ -63,6 +63,12 @@ def parse_args():
                         help='Test set ratio')
     parser.add_argument('--min_shots_per_tile', type=int, default=10,
                         help='Minimum GEDI shots per tile')
+    parser.add_argument('--early_stopping_patience', type=int, default=10,
+                        help='Early stopping patience (epochs)')
+    parser.add_argument('--lr_scheduler_patience', type=int, default=5,
+                        help='LR scheduler patience (epochs)')
+    parser.add_argument('--lr_scheduler_factor', type=float, default=0.5,
+                        help='LR scheduler reduction factor')
 
     # Output arguments
     parser.add_argument('--output_dir', type=str, default='./outputs',
@@ -308,9 +314,20 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    # Learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=args.lr_scheduler_factor,
+        patience=args.lr_scheduler_patience,
+        verbose=True
+    )
+
     # Step 6: Training loop
     print("Step 6: Training...")
     best_val_loss = float('inf')
+    best_r2 = float('-inf')
+    epochs_without_improvement = 0
     train_losses = []
     val_losses = []
 
@@ -326,17 +343,25 @@ def main():
         val_loss, val_metrics = validate(model, val_loader, args.device)
         val_losses.append(val_loss)
 
-        # Print metrics
-        print(f"Train Loss: {train_loss:.4f}")
-        print(f"Val Loss:   {val_loss:.4f}")
+        # Print metrics (using scientific notation for losses)
+        print(f"Train Loss: {train_loss:.6e}")
+        print(f"Val Loss:   {val_loss:.6e}")
         if val_metrics:
             print(f"Val RMSE:   {val_metrics.get('rmse', 0):.4f}")
             print(f"Val MAE:    {val_metrics.get('mae', 0):.4f}")
             print(f"Val R²:     {val_metrics.get('r2', 0):.4f}")
 
-        # Save best model
+        # Get current learning rate
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Learning Rate: {current_lr:.6e}")
+
+        # Step the learning rate scheduler
+        scheduler.step(val_loss)
+
+        # Save best model based on validation loss
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_without_improvement = 0
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -344,7 +369,29 @@ def main():
                 'val_loss': val_loss,
                 'val_metrics': val_metrics
             }, output_dir / 'best_model.pt')
-            print("✓ Saved best model")
+            print("✓ Saved best model (lowest val loss)")
+        else:
+            epochs_without_improvement += 1
+
+        # Save best model based on R²
+        current_r2 = val_metrics.get('r2', float('-inf')) if val_metrics else float('-inf')
+        if current_r2 > best_r2:
+            best_r2 = current_r2
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': val_loss,
+                'val_metrics': val_metrics,
+                'r2': current_r2
+            }, output_dir / 'best_r2_model.pt')
+            print(f"✓ Saved best R² model (R² = {best_r2:.4f})")
+
+        # Early stopping check
+        if epochs_without_improvement >= args.early_stopping_patience:
+            print(f"\nEarly stopping triggered after {epoch} epochs")
+            print(f"No improvement in validation loss for {args.early_stopping_patience} epochs")
+            break
 
         # Save checkpoint
         if epoch % args.save_every == 0:
@@ -364,7 +411,8 @@ def main():
 
     print("\n" + "=" * 80)
     print("Training complete!")
-    print(f"Best validation loss: {best_val_loss:.4f}")
+    print(f"Best validation loss: {best_val_loss:.6e}")
+    print(f"Best R² score: {best_r2:.4f}")
     print(f"Models saved to: {output_dir}")
     print("=" * 80)
 
