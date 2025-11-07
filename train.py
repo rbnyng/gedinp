@@ -49,8 +49,12 @@ def parse_args():
                         help='Embedding feature dimension')
     parser.add_argument('--context_repr_dim', type=int, default=128,
                         help='Context representation dimension')
-    parser.add_argument('--use_attention', action='store_true', default=True,
-                        help='Use attention for context aggregation')
+    parser.add_argument('--latent_dim', type=int, default=128,
+                        help='Latent variable dimension')
+    parser.add_argument('--architecture_mode', type=str, default='deterministic',
+                        choices=['deterministic', 'latent', 'anp', 'cnp'],
+                        help='Architecture mode: deterministic (attention only), '
+                             'latent (stochastic only), anp (both), cnp (baseline)')
     parser.add_argument('--num_attention_heads', type=int, default=4,
                         help='Number of attention heads')
 
@@ -73,6 +77,10 @@ def parse_args():
                         help='LR scheduler patience (epochs)')
     parser.add_argument('--lr_scheduler_factor', type=float, default=0.5,
                         help='LR scheduler reduction factor')
+    parser.add_argument('--kl_weight_max', type=float, default=1.0,
+                        help='Maximum KL weight (for beta-VAE style training)')
+    parser.add_argument('--kl_warmup_epochs', type=int, default=10,
+                        help='Number of epochs to warm up KL weight from 0 to max')
 
     # Dataset arguments
     parser.add_argument('--log_transform_agbd', action='store_true', default=True,
@@ -107,16 +115,20 @@ def set_seed(seed):
         torch.cuda.manual_seed(seed)
 
 
-def train_epoch(model, dataloader, optimizer, device):
+def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
     """Train for one epoch."""
     model.train()
     total_loss = 0
+    total_nll = 0
+    total_kl = 0
     n_tiles = 0
 
     for batch in tqdm(dataloader, desc='Training'):
         optimizer.zero_grad()
 
         batch_loss = 0
+        batch_nll = 0
+        batch_kl = 0
         n_tiles_in_batch = 0
 
         # Process each tile in the batch
@@ -133,16 +145,20 @@ def train_epoch(model, dataloader, optimizer, device):
                 continue
 
             # Forward pass
-            pred_mean, pred_log_var = model(
+            pred_mean, pred_log_var, z_mu, z_log_sigma = model(
                 context_coords,
                 context_embeddings,
                 context_agbd,
                 target_coords,
-                target_embeddings
+                target_embeddings,
+                training=True
             )
 
             # Compute loss
-            loss = neural_process_loss(pred_mean, pred_log_var, target_agbd)
+            loss, loss_dict = neural_process_loss(
+                pred_mean, pred_log_var, target_agbd,
+                z_mu, z_log_sigma, kl_weight
+            )
 
             # Check for NaN/Inf
             if torch.isnan(loss) or torch.isinf(loss):
@@ -150,6 +166,8 @@ def train_epoch(model, dataloader, optimizer, device):
                 continue
 
             batch_loss += loss
+            batch_nll += loss_dict['nll']
+            batch_kl += loss_dict['kl']
             n_tiles_in_batch += 1
 
         if n_tiles_in_batch > 0:
@@ -162,21 +180,31 @@ def train_epoch(model, dataloader, optimizer, device):
             optimizer.step()
 
             total_loss += batch_loss.item()
+            total_nll += batch_nll / n_tiles_in_batch
+            total_kl += batch_kl / n_tiles_in_batch
             n_tiles += n_tiles_in_batch
 
-    return total_loss / max(n_tiles, 1)
+    return {
+        'loss': total_loss / max(n_tiles, 1),
+        'nll': total_nll / max(n_tiles, 1),
+        'kl': total_kl / max(n_tiles, 1)
+    }
 
 
-def validate(model, dataloader, device):
+def validate(model, dataloader, device, kl_weight=1.0):
     """Validate the model."""
     model.eval()
     total_loss = 0
+    total_nll = 0
+    total_kl = 0
     all_metrics = []
     n_tiles = 0
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc='Validation'):
             batch_loss = 0
+            batch_nll = 0
+            batch_kl = 0
             n_tiles_in_batch = 0
 
             for i in range(len(batch['context_coords'])):
@@ -191,16 +219,20 @@ def validate(model, dataloader, device):
                     continue
 
                 # Forward pass
-                pred_mean, pred_log_var = model(
+                pred_mean, pred_log_var, z_mu, z_log_sigma = model(
                     context_coords,
                     context_embeddings,
                     context_agbd,
                     target_coords,
-                    target_embeddings
+                    target_embeddings,
+                    training=False
                 )
 
                 # Compute loss
-                loss = neural_process_loss(pred_mean, pred_log_var, target_agbd)
+                loss, loss_dict = neural_process_loss(
+                    pred_mean, pred_log_var, target_agbd,
+                    z_mu, z_log_sigma, kl_weight
+                )
 
                 # Check for NaN/Inf
                 if torch.isnan(loss) or torch.isinf(loss):
@@ -212,6 +244,8 @@ def validate(model, dataloader, device):
                     continue
 
                 batch_loss += loss
+                batch_nll += loss_dict['nll']
+                batch_kl += loss_dict['kl']
                 n_tiles_in_batch += 1
 
                 # Compute metrics
@@ -222,9 +256,13 @@ def validate(model, dataloader, device):
             if n_tiles_in_batch > 0:
                 batch_loss = batch_loss / n_tiles_in_batch
                 total_loss += batch_loss.item()
+                total_nll += batch_nll / n_tiles_in_batch
+                total_kl += batch_kl / n_tiles_in_batch
                 n_tiles += n_tiles_in_batch
 
     avg_loss = total_loss / max(n_tiles, 1)
+    avg_nll = total_nll / max(n_tiles, 1)
+    avg_kl = total_kl / max(n_tiles, 1)
 
     # Aggregate metrics
     avg_metrics = {}
@@ -232,7 +270,7 @@ def validate(model, dataloader, device):
         for key in all_metrics[0].keys():
             avg_metrics[key] = np.mean([m[key] for m in all_metrics])
 
-    return avg_loss, avg_metrics
+    return {'loss': avg_loss, 'nll': avg_nll, 'kl': avg_kl}, avg_metrics
 
 
 def main():
@@ -361,14 +399,16 @@ def main():
 
     # Step 5: Initialize model
     print("Step 5: Initializing model...")
+    print(f"Architecture mode: {args.architecture_mode}")
     model = GEDINeuralProcess(
         patch_size=args.patch_size,
         embedding_channels=128,
         embedding_feature_dim=args.embedding_feature_dim,
         context_repr_dim=args.context_repr_dim,
         hidden_dim=args.hidden_dim,
+        latent_dim=args.latent_dim,
         output_uncertainty=True,
-        use_attention=args.use_attention,
+        architecture_mode=args.architecture_mode,
         num_attention_heads=args.num_attention_heads
     ).to(args.device)
 
@@ -398,38 +438,44 @@ def main():
         print(f"\nEpoch {epoch}/{args.epochs}")
         print("-" * 80)
 
+        # Compute KL weight with warmup (linear from 0 to max)
+        if args.kl_warmup_epochs > 0:
+            kl_weight = min(1.0, epoch / args.kl_warmup_epochs) * args.kl_weight_max
+        else:
+            kl_weight = args.kl_weight_max
+
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, args.device)
-        train_losses.append(train_loss)
+        train_metrics = train_epoch(model, train_loader, optimizer, args.device, kl_weight)
+        train_losses.append(train_metrics['loss'])
 
         # Validate
-        val_loss, val_metrics = validate(model, val_loader, args.device)
-        val_losses.append(val_loss)
+        val_losses_dict, val_metrics = validate(model, val_loader, args.device, kl_weight)
+        val_losses.append(val_losses_dict['loss'])
 
         # Print metrics (using scientific notation for losses)
-        print(f"Train Loss: {train_loss:.6e}")
-        print(f"Val Loss:   {val_loss:.6e}")
+        print(f"Train Loss: {train_metrics['loss']:.6e} (NLL: {train_metrics['nll']:.6e}, KL: {train_metrics['kl']:.6e})")
+        print(f"Val Loss:   {val_losses_dict['loss']:.6e} (NLL: {val_losses_dict['nll']:.6e}, KL: {val_losses_dict['kl']:.6e})")
         if val_metrics:
             print(f"Val RMSE:   {val_metrics.get('rmse', 0):.4f}")
             print(f"Val MAE:    {val_metrics.get('mae', 0):.4f}")
             print(f"Val R²:     {val_metrics.get('r2', 0):.4f}")
 
-        # Get current learning rate
+        # Get current learning rate and KL weight
         current_lr = optimizer.param_groups[0]['lr']
-        print(f"Learning Rate: {current_lr:.6e}")
+        print(f"Learning Rate: {current_lr:.6e}, KL Weight: {kl_weight:.4f}")
 
         # Step the learning rate scheduler
-        scheduler.step(val_loss)
+        scheduler.step(val_losses_dict['loss'])
 
         # Save best model based on validation loss
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_losses_dict['loss'] < best_val_loss:
+            best_val_loss = val_losses_dict['loss']
             epochs_without_improvement = 0
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'val_loss': val_loss,
+                'val_loss': val_losses_dict['loss'],
                 'val_metrics': val_metrics
             }, output_dir / 'best_model.pt')
             print("✓ Saved best model (lowest val loss)")
@@ -444,7 +490,7 @@ def main():
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'val_loss': val_loss,
+                'val_loss': val_losses_dict['loss'],
                 'val_metrics': val_metrics,
                 'r2': current_r2
             }, output_dir / 'best_r2_model.pt')
