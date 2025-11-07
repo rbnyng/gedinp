@@ -53,12 +53,12 @@ def parse_args():
                         help='Disable preview generation')
     parser.add_argument('--cache_dir', type=str, default='./cache',
                         help='Cache directory for embeddings')
-    parser.add_argument('--gedi_start_time', type=str, default='2019-01-01',
+    parser.add_argument('--gedi_start_time', type=str, default='2022-01-01',
                         help='GEDI query start date (YYYY-MM-DD)')
-    parser.add_argument('--gedi_end_time', type=str, default='2023-12-31',
+    parser.add_argument('--gedi_end_time', type=str, default='2022-12-31',
                         help='GEDI query end date (YYYY-MM-DD)')
-    parser.add_argument('--embedding_year', type=int, default=2024,
-                        help='GeoTessera embedding year (default: 2024)')
+    parser.add_argument('--embedding_year', type=int, default=2022,
+                        help='GeoTessera embedding year (default: 2022)')
 
     return parser.parse_args()
 
@@ -117,7 +117,7 @@ def load_model_and_config(checkpoint_dir: Path, device: str):
         )
 
     print(f"Loading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
