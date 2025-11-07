@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from config import ExperimentConfig, get_agbd_config
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
@@ -25,78 +26,84 @@ from models.neural_process import (
 )
 
 
-def parse_args():
+def parse_config():
+    """Parse command line arguments and create/load config."""
     parser = argparse.ArgumentParser(description='Train GEDI Neural Process')
 
-    # Data arguments
+    # Config file (optional)
+    parser.add_argument('--config', type=str, default=None,
+                        help='Path to config JSON file (if provided, other args override config values)')
+
+    # Required argument
     parser.add_argument('--region_bbox', type=float, nargs=4, required=True,
                         help='Region bounding box: min_lon min_lat max_lon max_lat')
-    parser.add_argument('--start_time', type=str, default='2019-01-01',
-                        help='Start date for GEDI data (YYYY-MM-DD)')
-    parser.add_argument('--end_time', type=str, default='2023-12-31',
-                        help='End date for GEDI data (YYYY-MM-DD)')
-    parser.add_argument('--embedding_year', type=int, default=2024,
-                        help='Year of GeoTessera embeddings')
-    parser.add_argument('--cache_dir', type=str, default='./cache',
-                        help='Directory for caching tiles and embeddings')
 
-    # Model arguments
-    parser.add_argument('--patch_size', type=int, default=3,
-                        help='Embedding patch size (default: 3x3)')
-    parser.add_argument('--hidden_dim', type=int, default=512,
-                        help='Hidden layer dimension')
-    parser.add_argument('--embedding_feature_dim', type=int, default=128,
-                        help='Embedding feature dimension')
-    parser.add_argument('--context_repr_dim', type=int, default=128,
-                        help='Context representation dimension')
-    parser.add_argument('--use_attention', action='store_true', default=True,
-                        help='Use attention for context aggregation')
-    parser.add_argument('--num_attention_heads', type=int, default=4,
-                        help='Number of attention heads')
+    # Experiment name
+    parser.add_argument('--experiment_name', type=str, default='gedi_cnp',
+                        help='Experiment name (creates subdirectory in output_dir)')
 
-    # Training arguments
-    parser.add_argument('--batch_size', type=int, default=16,
-                        help='Batch size (number of tiles)')
-    parser.add_argument('--lr', type=float, default=5e-4,
-                        help='Learning rate')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='Number of epochs')
-    parser.add_argument('--val_ratio', type=float, default=0.15,
-                        help='Validation set ratio')
-    parser.add_argument('--test_ratio', type=float, default=0.15,
-                        help='Test set ratio')
-    parser.add_argument('--min_shots_per_tile', type=int, default=10,
-                        help='Minimum GEDI shots per tile')
-    parser.add_argument('--early_stopping_patience', type=int, default=15,
-                        help='Early stopping patience (epochs)')
-    parser.add_argument('--lr_scheduler_patience', type=int, default=5,
-                        help='LR scheduler patience (epochs)')
-    parser.add_argument('--lr_scheduler_factor', type=float, default=0.5,
-                        help='LR scheduler reduction factor')
-
-    # Dataset arguments
-    parser.add_argument('--log_transform_agbd', action='store_true', default=True,
-                        help='Apply log transform to AGBD')
-    parser.add_argument('--augment_coords', action='store_true', default=True,
-                        help='Add coordinate augmentation')
-    parser.add_argument('--coord_noise_std', type=float, default=0.01,
-                        help='Standard deviation for coordinate noise')
-
-    # Output arguments
-    parser.add_argument('--output_dir', type=str, default='./outputs',
+    # Optional overrides for common parameters
+    parser.add_argument('--output_dir', type=str, default=None,
                         help='Output directory for models and logs')
-    parser.add_argument('--save_every', type=int, default=10,
-                        help='Save checkpoint every N epochs')
-
-    # Other
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
-                        help='Device to use')
-    parser.add_argument('--seed', type=int, default=42,
+    parser.add_argument('--cache_dir', type=str, default=None,
+                        help='Directory for caching tiles and embeddings')
+    parser.add_argument('--device', type=str, default=None,
+                        help='Device to use (cuda/cpu)')
+    parser.add_argument('--seed', type=int, default=None,
                         help='Random seed')
-    parser.add_argument('--num_workers', type=int, default=0,
-                        help='Number of data loading workers')
+    parser.add_argument('--epochs', type=int, default=None,
+                        help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Batch size (number of tiles)')
+    parser.add_argument('--lr', type=float, default=None,
+                        help='Learning rate')
 
-    return parser.parse_args()
+    # Target variable selection
+    parser.add_argument('--target', type=str, default='agbd',
+                        choices=['agbd', 'rh98', 'cover', 'pai'],
+                        help='Target variable to predict')
+
+    args = parser.parse_args()
+
+    # Load config from file if provided, otherwise create default
+    if args.config:
+        config = ExperimentConfig.load(args.config)
+    else:
+        # Use preset config based on target
+        if args.target == 'agbd':
+            config = get_agbd_config()
+        else:
+            # Import other preset configs
+            from config import get_height_config, get_cover_config, get_pai_config
+            if args.target == 'rh98':
+                config = get_height_config()
+            elif args.target == 'cover':
+                config = get_cover_config()
+            elif args.target == 'pai':
+                config = get_pai_config()
+
+    # Override config with command line arguments
+    config.region_bbox = tuple(args.region_bbox)
+    config.experiment_name = args.experiment_name
+
+    if args.output_dir is not None:
+        config.output_dir = args.output_dir
+    if args.cache_dir is not None:
+        config.cache_dir = args.cache_dir
+    if args.device is not None:
+        config.device = args.device
+    else:
+        config.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if args.seed is not None:
+        config.seed = args.seed
+    if args.epochs is not None:
+        config.training.epochs = args.epochs
+    if args.batch_size is not None:
+        config.training.batch_size = args.batch_size
+    if args.lr is not None:
+        config.training.learning_rate = args.lr
+
+    return config
 
 
 def set_seed(seed):
@@ -236,22 +243,23 @@ def validate(model, dataloader, device):
 
 
 def main():
-    args = parse_args()
-    set_seed(args.seed)
+    config = parse_config()
+    set_seed(config.seed)
 
     # Create output directory
-    output_dir = Path(args.output_dir)
+    output_dir = config.get_output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save config
-    with open(output_dir / 'config.json', 'w') as f:
-        json.dump(vars(args), f, indent=2)
+    config.save(output_dir / 'config.json')
 
     print("=" * 80)
     print("GEDI Neural Process Training")
     print("=" * 80)
-    print(f"Device: {args.device}")
-    print(f"Region: {args.region_bbox}")
+    print(f"Experiment: {config.experiment_name}")
+    print(f"Target: {config.data.target_variable}")
+    print(f"Device: {config.device}")
+    print(f"Region: {config.region_bbox}")
     print(f"Output: {output_dir}")
     print()
 
@@ -259,10 +267,10 @@ def main():
     print("Step 1: Querying GEDI data...")
     querier = GEDIQuerier()
     gedi_df = querier.query_region_tiles(
-        region_bbox=args.region_bbox,
-        tile_size=0.1,
-        start_time=args.start_time,
-        end_time=args.end_time
+        region_bbox=config.region_bbox,
+        tile_size=config.data.tile_size,
+        start_time=config.start_time,
+        end_time=config.end_time
     )
     print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
     print()
@@ -274,9 +282,9 @@ def main():
     # Step 2: Extract embeddings
     print("Step 2: Extracting GeoTessera embeddings...")
     extractor = EmbeddingExtractor(
-        year=args.embedding_year,
-        patch_size=args.patch_size,
-        cache_dir=args.cache_dir
+        year=config.data.embedding_year,
+        patch_size=config.model.patch_size,
+        cache_dir=config.cache_dir
     )
     gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
     print()
@@ -294,9 +302,9 @@ def main():
     print("Step 3: Creating spatial train/val/test split...")
     splitter = SpatialTileSplitter(
         gedi_df,
-        val_ratio=args.val_ratio,
-        test_ratio=args.test_ratio,
-        random_state=args.seed
+        val_ratio=config.training.val_ratio,
+        test_ratio=config.training.test_ratio,
+        random_state=config.seed
     )
     train_df, val_df, test_df = splitter.split()
     print()
@@ -319,25 +327,23 @@ def main():
           f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
 
     # Save global bounds to config for future evaluation
-    config = vars(args)
-    config['global_bounds'] = list(global_bounds)
-    with open(output_dir / 'config.json', 'w') as f:
-        json.dump(config, f, indent=2)
+    config.global_bounds = global_bounds
+    config.save(output_dir / 'config.json')
 
     # Step 4: Create datasets
     print("Step 4: Creating datasets...")
     train_dataset = GEDINeuralProcessDataset(
         train_df,
-        min_shots_per_tile=args.min_shots_per_tile,
-        log_transform_agbd=args.log_transform_agbd,
-        augment_coords=args.augment_coords,
-        coord_noise_std=args.coord_noise_std,
+        min_shots_per_tile=config.data.min_shots_per_tile,
+        log_transform_agbd=config.data.log_transform_target,
+        augment_coords=config.augmentation.augment_coords,
+        coord_noise_std=config.augmentation.coord_noise_std,
         global_bounds=global_bounds
     )
     val_dataset = GEDINeuralProcessDataset(
         val_df,
-        min_shots_per_tile=args.min_shots_per_tile,
-        log_transform_agbd=args.log_transform_agbd,
+        min_shots_per_tile=config.data.min_shots_per_tile,
+        log_transform_agbd=config.data.log_transform_target,
         augment_coords=False,  # No augmentation for validation
         coord_noise_std=0.0,
         global_bounds=global_bounds
@@ -345,46 +351,46 @@ def main():
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
+        batch_size=config.training.batch_size,
         shuffle=True,
         collate_fn=collate_neural_process,
-        num_workers=args.num_workers
+        num_workers=config.num_workers
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,
+        batch_size=config.training.batch_size,
         shuffle=False,
         collate_fn=collate_neural_process,
-        num_workers=args.num_workers
+        num_workers=config.num_workers
     )
     print()
 
     # Step 5: Initialize model
     print("Step 5: Initializing model...")
     model = GEDINeuralProcess(
-        patch_size=args.patch_size,
-        embedding_channels=128,
-        embedding_feature_dim=args.embedding_feature_dim,
-        context_repr_dim=args.context_repr_dim,
-        hidden_dim=args.hidden_dim,
-        output_uncertainty=True,
-        use_attention=args.use_attention,
-        num_attention_heads=args.num_attention_heads
-    ).to(args.device)
+        patch_size=config.model.patch_size,
+        embedding_channels=config.model.embedding_channels,
+        embedding_feature_dim=config.model.embedding_feature_dim,
+        context_repr_dim=config.model.context_repr_dim,
+        hidden_dim=config.model.hidden_dim,
+        output_uncertainty=config.model.output_uncertainty,
+        use_attention=config.model.use_attention,
+        num_attention_heads=config.model.num_attention_heads
+    ).to(config.device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
     print()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.learning_rate)
 
     # Learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='min',
-        factor=args.lr_scheduler_factor,
-        patience=args.lr_scheduler_patience
-    )
+        factor=config.training.lr_scheduler_factor,
+        patience=config.training.lr_scheduler_patience
+    ) if config.training.use_lr_scheduler else None
 
     # Step 6: Training loop
     print("Step 6: Training...")
@@ -394,16 +400,16 @@ def main():
     train_losses = []
     val_losses = []
 
-    for epoch in range(1, args.epochs + 1):
-        print(f"\nEpoch {epoch}/{args.epochs}")
+    for epoch in range(1, config.training.epochs + 1):
+        print(f"\nEpoch {epoch}/{config.training.epochs}")
         print("-" * 80)
 
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, args.device)
+        train_loss = train_epoch(model, train_loader, optimizer, config.device)
         train_losses.append(train_loss)
 
         # Validate
-        val_loss, val_metrics = validate(model, val_loader, args.device)
+        val_loss, val_metrics = validate(model, val_loader, config.device)
         val_losses.append(val_loss)
 
         # Print metrics (using scientific notation for losses)
@@ -419,7 +425,8 @@ def main():
         print(f"Learning Rate: {current_lr:.6e}")
 
         # Step the learning rate scheduler
-        scheduler.step(val_loss)
+        if scheduler is not None:
+            scheduler.step(val_loss)
 
         # Save best model based on validation loss
         if val_loss < best_val_loss:
@@ -451,13 +458,13 @@ def main():
             print(f"✓ Saved best R² model (R² = {best_r2:.4f})")
 
         # Early stopping check
-        if epochs_without_improvement >= args.early_stopping_patience:
+        if config.training.early_stopping and epochs_without_improvement >= config.training.early_stopping_patience:
             print(f"\nEarly stopping triggered after {epoch} epochs")
-            print(f"No improvement in validation loss for {args.early_stopping_patience} epochs")
+            print(f"No improvement in validation loss for {config.training.early_stopping_patience} epochs")
             break
 
         # Save checkpoint
-        if epoch % args.save_every == 0:
+        if epoch % config.training.save_every == 0:
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
