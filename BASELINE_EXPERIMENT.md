@@ -26,6 +26,18 @@ This experiment tests whether the Conditional Neural Process (CNP) architecture 
 - **Features:** 1152D flattened embeddings + 2D lat/lon
 - **Complexity:** Higher parameter count due to larger input
 
+### 4. XGBoost Baseline
+- **Architecture:** Gradient boosted decision trees
+- **Training:** Direct point-to-point mapping (fast, minutes not hours)
+- **Features:** 1154D flattened embeddings + 2D lat/lon
+- **Complexity:** Controlled by n_estimators and max_depth
+
+### 5. Random Forest Baseline
+- **Architecture:** Ensemble of decision trees
+- **Training:** Direct point-to-point mapping (fast)
+- **Features:** 1154D flattened embeddings + 2D lat/lon
+- **Complexity:** Controlled by n_estimators and max_depth
+
 ## Usage
 
 ### Train Baseline Model
@@ -46,9 +58,41 @@ python train_baseline.py \
 - `simple_mlp`: Uses same CNN encoder as CNP (fair comparison)
 - `flat_mlp`: Flattens embedding patch (tests if CNN helps)
 
-### Compare Models
+### Train Tree-Based Baseline (XGBoost/Random Forest)
 
-After training both CNP and baseline:
+```bash
+python train_tree_baseline.py \
+    --region_bbox -122.5 37.5 -122.0 38.0 \
+    --model_type both \
+    --n_estimators 100 \
+    --max_depth 10 \
+    --output_dir ./outputs_tree
+```
+
+**Model Types:**
+- `xgboost`: XGBoost gradient boosting (requires: pip install xgboost)
+- `random_forest`: Random Forest ensemble
+- `both`: Train both models
+
+**Advantages:**
+- **Fast training:** Minutes instead of hours
+- **No GPU needed:** Runs efficiently on CPU
+- **Strong baseline:** Often competitive with neural networks
+- **Interpretable:** Can extract feature importances
+
+### Compare All Models
+
+Compare CNP, MLP baseline, and tree baselines:
+
+```bash
+python compare_all_models.py \
+    --cnp_dir ./outputs \
+    --mlp_dir ./outputs_baseline \
+    --tree_dir ./outputs_tree \
+    --output_file all_models_comparison.json
+```
+
+Or compare just CNP vs MLP:
 
 ```bash
 python compare_models.py \
@@ -58,9 +102,10 @@ python compare_models.py \
 ```
 
 This will output:
-- Test set performance for both models
-- Side-by-side comparison
+- Test set performance for all models
+- Side-by-side comparison table
 - Percentage differences
+- Best model identification
 - Interpretation of results
 
 ## Expected Outcomes
@@ -95,37 +140,63 @@ This will output:
 
 ### Key Differences
 
-| Aspect | CNP | Baseline |
-|--------|-----|----------|
-| Training | Context/target splits | Direct mapping |
-| Architecture | 4 components + attention | Single MLP |
-| Batch Size | 16 tiles | 256 individual points |
-| Aggregation | Attention over context | None |
-| Inference | Requires context set | Direct prediction |
+| Aspect | CNP | MLP Baseline | Tree Baseline |
+|--------|-----|--------------|---------------|
+| Training | Context/target splits | Direct mapping | Direct mapping |
+| Architecture | 4 components + attention | Single MLP | Decision trees |
+| Training Time | Hours (GPU) | Hours (GPU) | Minutes (CPU) |
+| Batch Size | 16 tiles | 256 points | N/A |
+| Aggregation | Attention over context | None | Tree splits |
+| Inference | Requires context set | Direct prediction | Direct prediction |
+| Uncertainty | Learned variance | Learned variance | None (RF: variance across trees) |
 
 ## Files
 
-- `models/baseline.py` - Baseline model implementations
-- `train_baseline.py` - Training script for baselines
-- `compare_models.py` - Model comparison script
+- `models/baseline.py` - MLP baseline model implementations (SimpleMLPBaseline, FlatMLPBaseline)
+- `train_baseline.py` - Training script for MLP baselines
+- `train_tree_baseline.py` - Training script for tree-based baselines (XGBoost, Random Forest)
+- `compare_models.py` - Compare CNP vs MLP baseline
+- `compare_all_models.py` - Compare all models (CNP, MLP, XGBoost, RF)
 - `BASELINE_EXPERIMENT.md` - This document
 
 ## Next Steps
 
-1. Train baseline on your data
-2. Compare with existing CNP results
-3. Based on comparison:
-   - If similar: Consider using baseline or investigating why CNP doesn't help
-   - If CNP better: Document the performance gain and continue with CNP
-   - If baseline better: Debug CNP training or tune hyperparameters
+1. **Quick Start:** Train tree baselines first (fastest, minutes on CPU)
+2. **Compare:** If tree models do well, train MLP baseline
+3. **Final Test:** If simple baselines perform well, compare with CNP
+4. **Interpret Results:**
+   - If tree/MLP performs similarly to CNP → Use simpler model
+   - If CNP significantly better → Context aggregation is valuable
+   - If baselines better → Investigate CNP training or hyperparameters
 
-## Optional: XGBoost/Random Forest
+## Recommended Training Order
 
-For an even simpler baseline, you could extract the embeddings + coordinates and train XGBoost or Random Forest. This would be the fastest to train and could provide additional insights.
+1. **Start with XGBoost/RF** (fastest, ~5-10 minutes)
+   - Establishes a quick performance baseline
+   - No GPU required
+   - If these work well, CNP may be overkill
 
-To add this:
-1. Extract features from the dataset
-2. Train XGBoost/RF with scikit-learn
-3. Compare performance
+2. **Then MLP baseline** (~1-2 hours on GPU)
+   - Tests if neural network helps vs tree models
+   - Uses same features as CNP for fair comparison
 
-This is left as a future enhancement if the MLP baseline shows promise.
+3. **Finally compare with CNP** (if needed)
+   - Only if simpler models are insufficient
+   - Determines value of context aggregation
+
+## Dependencies
+
+### For MLP Baselines
+```bash
+# Already installed if you have the CNP setup
+torch, numpy, pandas
+```
+
+### For Tree Baselines
+```bash
+# Install XGBoost (optional, Random Forest works without it)
+pip install xgboost
+
+# scikit-learn (likely already installed)
+pip install scikit-learn
+```
