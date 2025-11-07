@@ -5,14 +5,20 @@ from typing import Tuple, Optional
 
 
 class EmbeddingEncoder(nn.Module):
-    """Encode GeoTessera embedding patches into feature vectors."""
+    """
+    Encode GeoTessera embedding patches into feature vectors.
+
+    Uses a deeper CNN architecture with residual connections and batch
+    normalization for improved feature extraction from embedding patches.
+    """
 
     def __init__(
         self,
         patch_size: int = 3,
         in_channels: int = 128,
         hidden_dim: int = 256,
-        output_dim: int = 128
+        output_dim: int = 128,
+        use_batch_norm: bool = True
     ):
         """
         Initialize embedding encoder.
@@ -22,16 +28,40 @@ class EmbeddingEncoder(nn.Module):
             in_channels: Number of embedding channels (128 for GeoTessera)
             hidden_dim: Hidden layer dimension
             output_dim: Output feature dimension
+            use_batch_norm: Whether to use batch normalization
         """
         super().__init__()
 
-        # CNN to process spatial structure of embedding patch
-        self.conv1 = nn.Conv2d(in_channels, hidden_dim, kernel_size=3, padding=1)
+        self.use_batch_norm = use_batch_norm
+
+        # Initial projection to match dimensions for residual connection
+        self.input_proj = nn.Conv2d(in_channels, hidden_dim, kernel_size=1)
+        if use_batch_norm:
+            self.input_bn = nn.BatchNorm2d(hidden_dim)
+
+        # First residual block
+        self.conv1 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        if use_batch_norm:
+            self.bn1 = nn.BatchNorm2d(hidden_dim)
         self.conv2 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        if use_batch_norm:
+            self.bn2 = nn.BatchNorm2d(hidden_dim)
+
+        # Second residual block
+        self.conv3 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        if use_batch_norm:
+            self.bn3 = nn.BatchNorm2d(hidden_dim)
+        self.conv4 = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1)
+        if use_batch_norm:
+            self.bn4 = nn.BatchNorm2d(hidden_dim)
 
         # Global pooling and projection
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
 
     def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
         """
@@ -46,17 +76,43 @@ class EmbeddingEncoder(nn.Module):
         # Reshape to (batch, channels, height, width)
         x = embeddings.permute(0, 3, 1, 2)
 
-        # CNN layers
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
+        # Initial projection
+        x = self.input_proj(x)
+        if self.use_batch_norm:
+            x = self.input_bn(x)
+        x = F.relu(x)
+
+        # First residual block
+        identity = x
+        out = self.conv1(x)
+        if self.use_batch_norm:
+            out = self.bn1(out)
+        out = F.relu(out)
+        out = self.conv2(out)
+        if self.use_batch_norm:
+            out = self.bn2(out)
+        out = out + identity  # Skip connection
+        out = F.relu(out)
+
+        # Second residual block
+        identity = out
+        out = self.conv3(out)
+        if self.use_batch_norm:
+            out = self.bn3(out)
+        out = F.relu(out)
+        out = self.conv4(out)
+        if self.use_batch_norm:
+            out = self.bn4(out)
+        out = out + identity  # Skip connection
+        out = F.relu(out)
 
         # Global pooling
-        x = self.pool(x).squeeze(-1).squeeze(-1)
+        out = self.pool(out).squeeze(-1).squeeze(-1)
 
-        # Projection
-        x = self.fc(x)
+        # Projection to output dimension
+        out = self.fc(out)
 
-        return x
+        return out
 
 
 class ContextEncoder(nn.Module):
