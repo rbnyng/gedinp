@@ -25,31 +25,56 @@ class GEDINeuralProcessDataset(Dataset):
         max_shots_per_tile: Optional[int] = None,
         context_ratio_range: Tuple[float, float] = (0.3, 0.7),
         normalize_coords: bool = True,
-        normalize_agbd: bool = True,
-        agbd_scale: float = 200.0,  # Typical max AGBD in Mg/ha
-        log_transform_agbd: bool = True,
+        normalize_target: bool = None,  # New name
+        target_scale: float = None,  # New name
+        log_transform_target: bool = None,  # New name
         augment_coords: bool = True,
         coord_noise_std: float = 0.01,
-        global_bounds: Optional[Tuple[float, float, float, float]] = None
+        global_bounds: Optional[Tuple[float, float, float, float]] = None,
+        target_variable: str = 'agbd',
+        # Backward compatibility (deprecated)
+        normalize_agbd: bool = None,
+        agbd_scale: float = None,
+        log_transform_agbd: bool = None
     ):
         """
         Initialize dataset.
 
         Args:
-            data_df: DataFrame with columns: latitude, longitude, agbd, embedding_patch, tile_id
+            data_df: DataFrame with columns: latitude, longitude, target_variable, embedding_patch, tile_id
             min_shots_per_tile: Minimum number of shots per tile to include
             max_shots_per_tile: Maximum shots per tile (subsample if exceeded)
             context_ratio_range: Range of context/total ratios for training (min, max)
             normalize_coords: Normalize coordinates to [0, 1] using global bounds
-            normalize_agbd: Normalize AGBD values
-            agbd_scale: Scale factor for AGBD normalization
-            log_transform_agbd: Apply log(1+x) transform to AGBD
+            normalize_target: Normalize target values
+            target_scale: Scale factor for target normalization (e.g., 200 for AGBD, 50 for RH98)
+            log_transform_target: Apply log(1+x) transform to target (recommended for AGBD)
             augment_coords: Add small random noise to coordinates during training
             coord_noise_std: Standard deviation of coordinate noise
             global_bounds: Global coordinate bounds (lon_min, lat_min, lon_max, lat_max).
                           If None, computed from data_df. Should be computed from training
                           data and shared across train/val/test for proper normalization.
+            target_variable: Name of target variable column in dataframe (e.g., 'agbd', 'rh98')
         """
+        # Handle backward compatibility for renamed parameters
+        if normalize_agbd is not None:
+            if normalize_target is None:
+                normalize_target = normalize_agbd
+        if agbd_scale is not None:
+            if target_scale is None:
+                target_scale = agbd_scale
+        if log_transform_agbd is not None:
+            if log_transform_target is None:
+                log_transform_target = log_transform_agbd
+
+        # Set defaults if still None
+        if normalize_target is None:
+            normalize_target = True
+        if target_scale is None:
+            target_scale = 200.0
+        if log_transform_target is None:
+            log_transform_target = True
+
         # Filter out shots without embeddings
         self.data_df = data_df[data_df['embedding_patch'].notna()].copy()
 
@@ -66,11 +91,12 @@ class GEDINeuralProcessDataset(Dataset):
         self.max_shots_per_tile = max_shots_per_tile
         self.context_ratio_range = context_ratio_range
         self.normalize_coords = normalize_coords
-        self.normalize_agbd = normalize_agbd
-        self.agbd_scale = agbd_scale
-        self.log_transform_agbd = log_transform_agbd
+        self.normalize_target = normalize_target
+        self.target_scale = target_scale
+        self.log_transform_target = log_transform_target
         self.augment_coords = augment_coords
         self.coord_noise_std = coord_noise_std
+        self.target_variable = target_variable
 
         # Store global bounds for normalization
         if global_bounds is None:
@@ -122,10 +148,13 @@ class GEDINeuralProcessDataset(Dataset):
         Returns a dict with:
             - context_coords: (n_context, 2) coordinates [lon, lat]
             - context_embeddings: (n_context, patch_size, patch_size, 128)
-            - context_agbd: (n_context, 1) AGBD values
+            - context_agbd: (n_context, 1) target values (key named 'agbd' for backward compatibility)
             - target_coords: (n_target, 2) coordinates
             - target_embeddings: (n_target, patch_size, patch_size, 128)
-            - target_agbd: (n_target, 1) AGBD values
+            - target_agbd: (n_target, 1) target values (key named 'agbd' for backward compatibility)
+
+        Note: Despite the 'agbd' key name, the values correspond to self.target_variable
+              (which could be 'agbd', 'rh98', 'cover', etc.)
         """
         tile_data = self.tiles[idx].copy()
         n_shots = len(tile_data)
@@ -142,7 +171,7 @@ class GEDINeuralProcessDataset(Dataset):
         tile_array = tile_data.to_numpy()
         coords = tile_data[['longitude', 'latitude']].values
         embeddings = np.stack(tile_data['embedding_patch'].values)  # (N, H, W, C)
-        agbd = tile_data['agbd'].values[:, None]  # (N, 1)
+        target_values = tile_data[self.target_variable].values[:, None]  # (N, 1)
 
         # Normalize coordinates
         if self.normalize_coords:
@@ -154,31 +183,33 @@ class GEDINeuralProcessDataset(Dataset):
             # Clip to stay in valid range
             coords = np.clip(coords, 0, 1)
 
-        # Normalize AGBD
-        if self.normalize_agbd:
-            if self.log_transform_agbd:
+        # Normalize target variable
+        if self.normalize_target:
+            if self.log_transform_target:
                 # Log transform then normalize
-                agbd = np.log1p(agbd) / np.log1p(self.agbd_scale)
+                target_values = np.log1p(target_values) / np.log1p(self.target_scale)
             else:
                 # Direct normalization
-                agbd = agbd / self.agbd_scale
+                target_values = target_values / self.target_scale
 
         # Split context/target
         context_coords = coords[context_indices]
         context_embeddings = embeddings[context_indices]
-        context_agbd = agbd[context_indices]
+        context_target = target_values[context_indices]
 
         target_coords = coords[target_indices]
         target_embeddings = embeddings[target_indices]
-        target_agbd = agbd[target_indices]
+        target_target = target_values[target_indices]
 
+        # Note: Keep 'agbd' key names for backward compatibility,
+        # but values come from configured target_variable
         return {
             'context_coords': torch.from_numpy(context_coords).float(),
             'context_embeddings': torch.from_numpy(context_embeddings).float(),
-            'context_agbd': torch.from_numpy(context_agbd).float(),
+            'context_agbd': torch.from_numpy(context_target).float(),
             'target_coords': torch.from_numpy(target_coords).float(),
             'target_embeddings': torch.from_numpy(target_embeddings).float(),
-            'target_agbd': torch.from_numpy(target_agbd).float(),
+            'target_agbd': torch.from_numpy(target_target).float(),
         }
 
 
