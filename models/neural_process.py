@@ -2,6 +2,68 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional
+import math
+
+
+class FourierCoordinateEncoding(nn.Module):
+    """
+    Fourier feature encoding for coordinates.
+
+    Transforms 2D coordinates into high-dimensional features using sinusoidal functions
+    at multiple frequency scales. This helps the model capture multi-scale spatial patterns.
+    """
+
+    def __init__(self, num_frequencies: int = 10, include_original: bool = True):
+        """
+        Initialize Fourier encoding.
+
+        Args:
+            num_frequencies: Number of frequency scales to use
+            include_original: Whether to include original coordinates in output
+        """
+        super().__init__()
+        self.num_frequencies = num_frequencies
+        self.include_original = include_original
+
+        # Create frequency scales: 2^0, 2^1, ..., 2^(num_frequencies-1)
+        # These will be used to create sinusoidal features at different scales
+        frequencies = 2.0 ** torch.linspace(0, num_frequencies - 1, num_frequencies)
+        self.register_buffer('frequencies', frequencies)
+
+        # Output dimension: original coords (2) + sin/cos for each frequency (2 * 2 * num_frequencies)
+        self.output_dim = (2 if include_original else 0) + 4 * num_frequencies
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        """
+        Encode coordinates with Fourier features.
+
+        Args:
+            coords: (batch, 2) normalized coordinates in [0, 1]
+
+        Returns:
+            Fourier features (batch, output_dim)
+        """
+        # coords: (batch, 2)
+        # frequencies: (num_frequencies,)
+
+        # Compute freq * coords for all frequencies
+        # Shape: (batch, 2, num_frequencies)
+        scaled_coords = coords.unsqueeze(-1) * self.frequencies.unsqueeze(0).unsqueeze(0)
+
+        # Apply sin and cos
+        # Shape: (batch, 2, num_frequencies) each
+        sin_features = torch.sin(2 * math.pi * scaled_coords)
+        cos_features = torch.cos(2 * math.pi * scaled_coords)
+
+        # Flatten frequency dimension: (batch, 2 * num_frequencies) each
+        sin_features = sin_features.reshape(coords.shape[0], -1)
+        cos_features = cos_features.reshape(coords.shape[0], -1)
+
+        if self.include_original:
+            # Concatenate: original + sin + cos
+            return torch.cat([coords, sin_features, cos_features], dim=-1)
+        else:
+            return torch.cat([sin_features, cos_features], dim=-1)
 
 
 class EmbeddingEncoder(nn.Module):
@@ -221,13 +283,15 @@ class Decoder(nn.Module):
 
 
 class AttentionAggregator(nn.Module):
-    """Attention-based aggregation of context representations."""
+    """Attention-based aggregation of context representations with distance bias."""
 
     def __init__(
         self,
         dim: int = 128,
         num_heads: int = 4,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        use_distance_bias: bool = False,
+        distance_bias_scale: float = 1.0
     ):
         """
         Initialize attention aggregator.
@@ -236,8 +300,14 @@ class AttentionAggregator(nn.Module):
             dim: Feature dimension
             num_heads: Number of attention heads
             dropout: Dropout rate
+            use_distance_bias: Whether to add distance-based bias to attention
+            distance_bias_scale: Initial scale for distance bias (learnable)
         """
         super().__init__()
+
+        self.dim = dim
+        self.num_heads = num_heads
+        self.use_distance_bias = use_distance_bias
 
         self.attention = nn.MultiheadAttention(
             dim,
@@ -248,17 +318,33 @@ class AttentionAggregator(nn.Module):
         self.norm = nn.LayerNorm(dim)
         self.dropout = nn.Dropout(dropout)
 
+        # Learnable parameters for distance bias
+        if use_distance_bias:
+            # Scale parameter for distance (similar to temperature in attention)
+            # Initialized to provide reasonable bias, then learned during training
+            self.log_distance_scale = nn.Parameter(
+                torch.log(torch.tensor(distance_bias_scale))
+            )
+            # Optional: per-head scaling for distance bias
+            self.distance_bias_per_head = nn.Parameter(
+                torch.ones(num_heads)
+            )
+
     def forward(
         self,
         query_repr: torch.Tensor,
-        context_repr: torch.Tensor
+        context_repr: torch.Tensor,
+        query_coords: Optional[torch.Tensor] = None,
+        context_coords: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Aggregate context using attention.
+        Aggregate context using attention with optional distance bias.
 
         Args:
             query_repr: Query representations (n_query, dim)
             context_repr: Context representations (n_context, dim)
+            query_coords: Query coordinates (n_query, 2) - required if use_distance_bias
+            context_coords: Context coordinates (n_context, 2) - required if use_distance_bias
 
         Returns:
             Aggregated context for each query (n_query, dim)
@@ -267,14 +353,63 @@ class AttentionAggregator(nn.Module):
         query = query_repr.unsqueeze(0)  # (1, n_query, dim)
         context = context_repr.unsqueeze(0)  # (1, n_context, dim)
 
-        # Apply cross-attention
-        attended, _ = self.attention(query, context, context)
+        # Compute distance-based attention mask if enabled
+        attn_mask = None
+        if self.use_distance_bias:
+            if query_coords is None or context_coords is None:
+                raise ValueError("Coordinates required when use_distance_bias=True")
+
+            # Compute pairwise distances: (n_query, n_context)
+            # Using Euclidean distance in normalized coordinate space
+            distances = self._compute_pairwise_distances(query_coords, context_coords)
+
+            # Convert distances to attention bias
+            # Negative bias for larger distances (reduces attention weight)
+            # Scale is learned: larger scale = distance matters more
+            distance_scale = torch.exp(self.log_distance_scale)
+            distance_bias = -distance_scale * distances  # (n_query, n_context)
+
+            # Optionally scale per head
+            # Reshape for multi-head: (num_heads, n_query, n_context)
+            distance_bias = distance_bias.unsqueeze(0).expand(self.num_heads, -1, -1)
+            distance_bias = distance_bias * self.distance_bias_per_head.view(-1, 1, 1)
+
+            # Reshape for batch dimension: (1 * num_heads, n_query, n_context)
+            attn_mask = distance_bias.reshape(self.num_heads, query_coords.shape[0], context_coords.shape[0])
+
+        # Apply cross-attention with distance bias
+        attended, _ = self.attention(
+            query, context, context,
+            attn_mask=attn_mask,
+            need_weights=False
+        )
 
         # Apply dropout and residual connection
         attended = self.dropout(attended)
         output = self.norm(attended.squeeze(0) + query_repr)
 
         return output
+
+    def _compute_pairwise_distances(
+        self,
+        query_coords: torch.Tensor,
+        context_coords: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute pairwise Euclidean distances between query and context points.
+
+        Args:
+            query_coords: (n_query, 2)
+            context_coords: (n_context, 2)
+
+        Returns:
+            Distances (n_query, n_context)
+        """
+        # Efficient distance computation using broadcasting
+        # query: (n_query, 1, 2), context: (1, n_context, 2)
+        diff = query_coords.unsqueeze(1) - context_coords.unsqueeze(0)  # (n_query, n_context, 2)
+        distances = torch.norm(diff, dim=-1)  # (n_query, n_context)
+        return distances
 
 
 class GEDINeuralProcess(nn.Module):
@@ -297,7 +432,11 @@ class GEDINeuralProcess(nn.Module):
         hidden_dim: int = 256,
         output_uncertainty: bool = True,
         use_attention: bool = True,
-        num_attention_heads: int = 4
+        num_attention_heads: int = 4,
+        use_fourier_encoding: bool = False,
+        fourier_frequencies: int = 10,
+        use_distance_bias: bool = False,
+        distance_bias_scale: float = 1.0
     ):
         """
         Initialize Neural Process.
@@ -311,11 +450,28 @@ class GEDINeuralProcess(nn.Module):
             output_uncertainty: Whether to predict uncertainty
             use_attention: Use attention for context aggregation (vs mean pooling)
             num_attention_heads: Number of attention heads
+            use_fourier_encoding: Use Fourier features for coordinates
+            fourier_frequencies: Number of frequency scales for Fourier encoding
+            use_distance_bias: Add distance bias to attention mechanism
+            distance_bias_scale: Initial scale for distance bias (learnable)
         """
         super().__init__()
 
         self.output_uncertainty = output_uncertainty
         self.use_attention = use_attention
+        self.use_fourier_encoding = use_fourier_encoding
+        self.use_distance_bias = use_distance_bias
+
+        # Coordinate encoding
+        if use_fourier_encoding:
+            self.coord_encoder = FourierCoordinateEncoding(
+                num_frequencies=fourier_frequencies,
+                include_original=True
+            )
+            coord_dim = self.coord_encoder.output_dim
+        else:
+            self.coord_encoder = None
+            coord_dim = 2
 
         # Embedding encoder (shared for context and query)
         self.embedding_encoder = EmbeddingEncoder(
@@ -327,7 +483,7 @@ class GEDINeuralProcess(nn.Module):
 
         # Context encoder
         self.context_encoder = ContextEncoder(
-            coord_dim=2,
+            coord_dim=coord_dim,
             embedding_dim=embedding_feature_dim,
             hidden_dim=hidden_dim,
             output_dim=context_repr_dim
@@ -337,14 +493,16 @@ class GEDINeuralProcess(nn.Module):
         if use_attention:
             self.attention_aggregator = AttentionAggregator(
                 dim=context_repr_dim,
-                num_heads=num_attention_heads
+                num_heads=num_attention_heads,
+                use_distance_bias=use_distance_bias,
+                distance_bias_scale=distance_bias_scale
             )
             # Query projection for attention (coord + embedding -> context_repr_dim)
-            self.query_proj = nn.Linear(2 + embedding_feature_dim, context_repr_dim)
+            self.query_proj = nn.Linear(coord_dim + embedding_feature_dim, context_repr_dim)
 
         # Decoder
         self.decoder = Decoder(
-            coord_dim=2,
+            coord_dim=coord_dim,
             embedding_dim=embedding_feature_dim,
             context_dim=context_repr_dim,
             hidden_dim=hidden_dim,
@@ -363,23 +521,35 @@ class GEDINeuralProcess(nn.Module):
         Forward pass.
 
         Args:
-            context_coords: (n_context, 2)
+            context_coords: (n_context, 2) - normalized coordinates
             context_embeddings: (n_context, patch_size, patch_size, channels)
             context_agbd: (n_context, 1)
-            query_coords: (n_query, 2)
+            query_coords: (n_query, 2) - normalized coordinates
             query_embeddings: (n_query, patch_size, patch_size, channels)
 
         Returns:
             (predicted_agbd, log_variance) for query points
             Shape: (n_query, 1) for each
         """
+        # Store original coordinates for distance computation (if needed)
+        context_coords_original = context_coords
+        query_coords_original = query_coords
+
+        # Apply Fourier encoding to coordinates if enabled
+        if self.use_fourier_encoding:
+            context_coords_encoded = self.coord_encoder(context_coords)
+            query_coords_encoded = self.coord_encoder(query_coords)
+        else:
+            context_coords_encoded = context_coords
+            query_coords_encoded = query_coords
+
         # Encode embeddings
         context_emb_features = self.embedding_encoder(context_embeddings)
         query_emb_features = self.embedding_encoder(query_embeddings)
 
-        # Encode context points
+        # Encode context points (with Fourier-encoded or original coords)
         context_repr = self.context_encoder(
-            context_coords,
+            context_coords_encoded,
             context_emb_features,
             context_agbd
         )
@@ -388,15 +558,18 @@ class GEDINeuralProcess(nn.Module):
         if self.use_attention:
             # Create query representations for attention
             # Use query coords + embeddings as query features
-            query_repr = torch.cat([query_coords, query_emb_features], dim=-1)
+            query_repr = torch.cat([query_coords_encoded, query_emb_features], dim=-1)
 
             # Project to context dimension
             query_repr_projected = self.query_proj(query_repr)
 
             # Use attention to aggregate context
+            # Pass original (non-Fourier) coordinates for distance computation
             aggregated_context = self.attention_aggregator(
                 query_repr_projected,
-                context_repr
+                context_repr,
+                query_coords=query_coords_original if self.use_distance_bias else None,
+                context_coords=context_coords_original if self.use_distance_bias else None
             )
         else:
             # Mean pooling (original method)
@@ -404,9 +577,9 @@ class GEDINeuralProcess(nn.Module):
             # Expand to match query batch size
             aggregated_context = aggregated_context.expand(query_coords.shape[0], -1)
 
-        # Decode query points
+        # Decode query points (with Fourier-encoded or original coords)
         pred_mean, pred_log_var = self.decoder(
-            query_coords,
+            query_coords_encoded,
             query_emb_features,
             aggregated_context
         )

@@ -53,6 +53,14 @@ def parse_args():
                         help='Use attention for context aggregation')
     parser.add_argument('--num_attention_heads', type=int, default=4,
                         help='Number of attention heads')
+    parser.add_argument('--use_fourier_encoding', action='store_true', default=False,
+                        help='Use Fourier features for coordinate encoding')
+    parser.add_argument('--fourier_frequencies', type=int, default=10,
+                        help='Number of frequency scales for Fourier encoding')
+    parser.add_argument('--use_distance_bias', action='store_true', default=False,
+                        help='Add distance bias to attention mechanism')
+    parser.add_argument('--distance_bias_scale', type=float, default=1.0,
+                        help='Initial scale for distance bias (learnable parameter)')
 
     # Training arguments
     parser.add_argument('--batch_size', type=int, default=16,
@@ -369,7 +377,11 @@ def main():
         hidden_dim=args.hidden_dim,
         output_uncertainty=True,
         use_attention=args.use_attention,
-        num_attention_heads=args.num_attention_heads
+        num_attention_heads=args.num_attention_heads,
+        use_fourier_encoding=args.use_fourier_encoding,
+        fourier_frequencies=args.fourier_frequencies,
+        use_distance_bias=args.use_distance_bias,
+        distance_bias_scale=args.distance_bias_scale
     ).to(args.device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
