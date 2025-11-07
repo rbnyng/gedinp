@@ -111,6 +111,89 @@ class ContextEncoder(nn.Module):
         return self.mlp(x)
 
 
+class AttentionAggregator(nn.Module):
+    """
+    Attention-based aggregation of context representations.
+
+    Computes attention weights for each context point based on query points,
+    allowing the model to focus on relevant context information.
+    """
+
+    def __init__(
+        self,
+        context_dim: int = 128,
+        query_coord_dim: int = 2,
+        query_embedding_dim: int = 128,
+        hidden_dim: int = 128
+    ):
+        """
+        Initialize attention aggregator.
+
+        Args:
+            context_dim: Dimension of context representations
+            query_coord_dim: Dimension of query coordinates
+            query_embedding_dim: Dimension of query embedding features
+            hidden_dim: Hidden dimension for attention computation
+        """
+        super().__init__()
+
+        # Combine query coord and embedding for attention key
+        query_dim = query_coord_dim + query_embedding_dim
+
+        # Attention mechanism
+        self.query_proj = nn.Linear(query_dim, hidden_dim)
+        self.context_proj = nn.Linear(context_dim, hidden_dim)
+        self.attention_head = nn.Linear(hidden_dim, 1)
+
+    def forward(
+        self,
+        context_repr: torch.Tensor,
+        query_coords: torch.Tensor,
+        query_embedding_features: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Aggregate context using attention.
+
+        Args:
+            context_repr: (n_context, context_dim)
+            query_coords: (n_query, coord_dim)
+            query_embedding_features: (n_query, embedding_dim)
+
+        Returns:
+            Aggregated context (n_query, context_dim)
+        """
+        n_query = query_coords.shape[0]
+        n_context = context_repr.shape[0]
+
+        # Combine query features
+        query_features = torch.cat([query_coords, query_embedding_features], dim=-1)  # (n_query, query_dim)
+
+        # Project query and context
+        query_proj = self.query_proj(query_features)  # (n_query, hidden_dim)
+        context_proj = self.context_proj(context_repr)  # (n_context, hidden_dim)
+
+        # Compute attention scores for each query-context pair
+        # Expand dimensions for broadcasting: (n_query, 1, hidden_dim) + (1, n_context, hidden_dim)
+        query_expanded = query_proj.unsqueeze(1)  # (n_query, 1, hidden_dim)
+        context_expanded = context_proj.unsqueeze(0)  # (1, n_context, hidden_dim)
+
+        # Element-wise combination and attention computation
+        attention_input = torch.tanh(query_expanded + context_expanded)  # (n_query, n_context, hidden_dim)
+        attention_scores = self.attention_head(attention_input).squeeze(-1)  # (n_query, n_context)
+
+        # Softmax to get attention weights
+        attention_weights = F.softmax(attention_scores, dim=-1)  # (n_query, n_context)
+
+        # Weighted sum of context representations
+        # (n_query, n_context, 1) * (1, n_context, context_dim) -> (n_query, n_context, context_dim) -> (n_query, context_dim)
+        aggregated = torch.bmm(
+            attention_weights.unsqueeze(1),  # (n_query, 1, n_context)
+            context_repr.unsqueeze(0).expand(n_query, -1, -1)  # (n_query, n_context, context_dim)
+        ).squeeze(1)  # (n_query, context_dim)
+
+        return aggregated
+
+
 class Decoder(nn.Module):
     """Decode query point + context representation to AGBD prediction."""
 
@@ -189,7 +272,7 @@ class GEDINeuralProcess(nn.Module):
     Architecture:
     1. Encode embedding patches to feature vectors
     2. Encode context points (coord + embedding feature + agbd)
-    3. Aggregate context representations (mean pooling)
+    3. Aggregate context representations (attention-based or mean pooling)
     4. Decode query points to AGBD predictions with uncertainty
     """
 
@@ -200,7 +283,8 @@ class GEDINeuralProcess(nn.Module):
         embedding_feature_dim: int = 128,
         context_repr_dim: int = 128,
         hidden_dim: int = 256,
-        output_uncertainty: bool = True
+        output_uncertainty: bool = True,
+        use_attention: bool = True
     ):
         """
         Initialize Neural Process.
@@ -212,10 +296,12 @@ class GEDINeuralProcess(nn.Module):
             context_repr_dim: Dimension of context representations
             hidden_dim: Hidden layer dimension
             output_uncertainty: Whether to predict uncertainty
+            use_attention: Whether to use attention for context aggregation (vs mean pooling)
         """
         super().__init__()
 
         self.output_uncertainty = output_uncertainty
+        self.use_attention = use_attention
 
         # Embedding encoder (shared for context and query)
         self.embedding_encoder = EmbeddingEncoder(
@@ -232,6 +318,15 @@ class GEDINeuralProcess(nn.Module):
             hidden_dim=hidden_dim,
             output_dim=context_repr_dim
         )
+
+        # Attention aggregator (optional)
+        if use_attention:
+            self.attention_aggregator = AttentionAggregator(
+                context_dim=context_repr_dim,
+                query_coord_dim=2,
+                query_embedding_dim=embedding_feature_dim,
+                hidden_dim=hidden_dim
+            )
 
         # Decoder
         self.decoder = Decoder(
@@ -275,11 +370,18 @@ class GEDINeuralProcess(nn.Module):
             context_agbd
         )
 
-        # Aggregate context (mean pooling)
-        aggregated_context = context_repr.mean(dim=0, keepdim=True)
-
-        # Expand to match query batch size
-        aggregated_context = aggregated_context.expand(query_coords.shape[0], -1)
+        # Aggregate context using attention or mean pooling
+        if self.use_attention:
+            # Attention-based aggregation (query-dependent)
+            aggregated_context = self.attention_aggregator(
+                context_repr,
+                query_coords,
+                query_emb_features
+            )
+        else:
+            # Simple mean pooling (query-independent)
+            aggregated_context = context_repr.mean(dim=0, keepdim=True)
+            aggregated_context = aggregated_context.expand(query_coords.shape[0], -1)
 
         # Decode query points
         pred_mean, pred_log_var = self.decoder(
