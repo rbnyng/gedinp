@@ -141,7 +141,13 @@ class ContextEncoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    """Decode query point + context representation to AGBD prediction."""
+    """
+    Decode query point + context representation to AGBD prediction.
+
+    IMPORTANT: This decoder outputs (mean, log_var) where log_var is the
+    logarithm of the VARIANCE (not standard deviation).
+    Convention: log_var = log(variance), so variance = exp(log_var), std = exp(0.5 * log_var)
+    """
 
     def __init__(
         self,
@@ -278,7 +284,13 @@ class AttentionAggregator(nn.Module):
 
 
 class LatentEncoder(nn.Module):
-    """Encode context representations into latent distribution (stochastic path)."""
+    """
+    Encode context representations into latent distribution (stochastic path).
+
+    IMPORTANT: This encoder outputs (mu, log_sigma) where log_sigma is the
+    logarithm of the STANDARD DEVIATION (not variance).
+    Convention: log_sigma = log(std), so sigma = exp(log_sigma)
+    """
 
     def __init__(
         self,
@@ -311,7 +323,7 @@ class LatentEncoder(nn.Module):
             context_repr: Context representations (n_context, context_repr_dim)
 
         Returns:
-            (mu, log_sigma) of latent distribution
+            (mu, log_sigma) of latent distribution, where log_sigma = log(std)
             Shape: (1, latent_dim) each
         """
         # Mean pool context
@@ -503,8 +515,10 @@ class GEDINeuralProcess(nn.Module):
             # Sample latent variable using reparameterization trick
             if training:
                 # Sample during training
-                epsilon = torch.randn_like(z_mu)
-                z = z_mu + epsilon * torch.exp(0.5 * z_log_sigma)
+                # NOTE: z_log_sigma is log(std), not log(variance)
+                # Therefore: sigma = exp(log_sigma), not exp(0.5 * log_sigma)
+                epsilon = torch.randn_like(z_mu, device=z_mu.device, dtype=z_mu.dtype)
+                z = z_mu + epsilon * torch.exp(z_log_sigma)
             else:
                 # Use mean during inference
                 z = z_mu
@@ -571,10 +585,14 @@ def kl_divergence_gaussian(
 
     Args:
         mu: Mean of approximate posterior (batch, latent_dim)
-        log_sigma: Log standard deviation of approximate posterior (batch, latent_dim)
+        log_sigma: Log standard deviation (batch, latent_dim), where log_sigma = log(std)
 
     Returns:
         KL divergence (scalar)
+
+    Note:
+        exp(2 * log_sigma) = exp(2 * log(std)) = std^2 = variance
+        -2 * log_sigma = -log(std^2) = -log(variance)
     """
     # KL divergence formula for Gaussian
     kl = 0.5 * torch.sum(
