@@ -66,25 +66,45 @@ This will:
 
 ### 2. Generating Predictions
 
-Generate dense AGB predictions for a tile:
+Generate dense AGB predictions at 10m resolution for a custom region:
 
 ```bash
 python predict.py \
-    --model_path ./outputs/best_model.pt \
-    --config_path ./outputs/config.json \
-    --tile_lon 30.35 \
-    --tile_lat -15.75 \
-    --grid_spacing 0.001 \
-    --visualize \
+    --checkpoint ./outputs \
+    --region 30.30 -15.80 30.40 -15.70 \
+    --resolution 10 \
+    --n_context 100 \
+    --batch_size 1024 \
     --output_dir ./predictions
 ```
 
 This will:
-- Load the trained model
-- Query nearby GEDI shots as context
-- Generate predictions on a dense grid (~100m spacing)
-- Save predictions as CSV
-- Optionally create visualization plots
+- Load the trained model and config (auto-detected from checkpoint directory)
+- Query 100 nearest GEDI shots as context
+- Generate predictions on a dense grid at 10m resolution
+- Save GeoTIFF files (mean AGB + uncertainty)
+- Save context points as GeoJSON
+- Generate visualization preview (mean + uncertainty side-by-side)
+
+**Key Options:**
+- `--checkpoint`: Path to trained model directory (contains config.json and best_model.pt)
+- `--region`: Bounding box [min_lon, min_lat, max_lon, max_lat]
+- `--resolution`: Output resolution in meters (default: 10m)
+- `--n_context`: Number of nearest GEDI shots for context (default: 100)
+- `--batch_size`: GPU batch size for inference (default: 1024)
+- `--device`: Use 'cuda' or 'cpu' (auto-detected by default)
+- `--no_preview`: Disable visualization generation
+- `--embedding_year`: GeoTessera year to use (default: 2024)
+
+**Outputs:**
+```
+predictions/
+├── region_<bbox>_agb_mean.tif       # Mean AGB predictions (GeoTIFF)
+├── region_<bbox>_agb_std.tif        # Uncertainty estimates (GeoTIFF)
+├── region_<bbox>_context.geojson    # GEDI context points
+├── region_<bbox>_preview.png        # Visualization
+└── region_<bbox>_metadata.json      # Prediction metadata
+```
 
 ### 3. Python API
 
