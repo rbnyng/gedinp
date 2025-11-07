@@ -355,7 +355,7 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
                 training=False
             )
 
-            # Convert to numpy (normalized values)
+            # Convert to numpy (keep normalized/log-scale values for calibration)
             pred_mean_norm = pred_mean.squeeze().cpu().numpy()
             target_norm = target_agbd.squeeze().cpu().numpy()
 
@@ -364,14 +364,11 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
             else:
                 pred_std_norm = np.zeros_like(pred_mean_norm)
 
-            # Denormalize from log scale to linear AGBD (Mg/ha)
-            pred_mean_np = denormalize_agbd(pred_mean_norm, agbd_scale)
-            target_np = denormalize_agbd(target_norm, agbd_scale)
-            pred_std_np = denormalize_std(pred_std_norm, pred_mean_norm, agbd_scale)
-
-            all_pred_means.extend(pred_mean_np)
-            all_pred_stds.extend(pred_std_np)
-            all_targets.extend(target_np)
+            # Use normalized values directly for calibration analysis
+            # (calibration should be assessed in the space where the model predicts)
+            all_pred_means.extend(pred_mean_norm)
+            all_pred_stds.extend(pred_std_norm)
+            all_targets.extend(target_norm)
 
     all_pred_means = np.array(all_pred_means)
     all_pred_stds = np.array(all_pred_stds)
@@ -467,9 +464,9 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
     max_val = max(max(bin_stds), max(bin_errors))
     ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Calibration')
 
-    ax.set_xlabel('Predicted Uncertainty (σ) [Mg/ha]', fontsize=11, fontweight='bold')
-    ax.set_ylabel('Actual Error (|pred - true|) [Mg/ha]', fontsize=11, fontweight='bold')
-    ax.set_title('Uncertainty vs Error', fontsize=12)
+    ax.set_xlabel('Predicted Uncertainty (σ) [normalized log scale]', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Actual Error (|pred - true|) [normalized log scale]', fontsize=11, fontweight='bold')
+    ax.set_title('Uncertainty vs Error (Log Scale)', fontsize=12)
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
@@ -489,7 +486,7 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
     print(f"✓ Saved uncertainty calibration to: {output_path}")
 
     # Print summary statistics
-    print("\nCalibration Summary:")
+    print("\nCalibration Summary (in normalized log space):")
     print(f"  Mean z-score: {z_mean:.3f} (ideal: 0.0)")
     print(f"  Std z-score:  {z_std:.3f} (ideal: 1.0)")
 
