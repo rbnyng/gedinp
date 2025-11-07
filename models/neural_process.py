@@ -180,6 +180,9 @@ class Decoder(nn.Module):
 
         if self.output_uncertainty:
             log_var = self.log_var_head(x)
+            # Clamp log_var to prevent numerical instability
+            # Range: variance between ~0.001 and ~150
+            log_var = torch.clamp(log_var, min=-7, max=5)
             return mean, log_var
         else:
             return mean, None
