@@ -343,8 +343,7 @@ def main():
         optimizer,
         mode='min',
         factor=args.lr_scheduler_factor,
-        patience=args.lr_scheduler_patience,
-        verbose=True
+        patience=args.lr_scheduler_patience
     )
 
     # Step 6: Training loop
