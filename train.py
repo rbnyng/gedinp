@@ -306,6 +306,24 @@ def main():
     val_df.to_csv(output_dir / 'val_split.csv', index=False)
     test_df.to_csv(output_dir / 'test_split.csv', index=False)
 
+    # Compute global coordinate bounds from training data
+    # This ensures consistent normalization across train/val/test sets
+    # and allows the model to learn latitude-dependent patterns
+    global_bounds = (
+        train_df['longitude'].min(),
+        train_df['latitude'].min(),
+        train_df['longitude'].max(),
+        train_df['latitude'].max()
+    )
+    print(f"Global bounds: lon [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}], "
+          f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
+
+    # Save global bounds to config for future evaluation
+    config = vars(args)
+    config['global_bounds'] = list(global_bounds)
+    with open(output_dir / 'config.json', 'w') as f:
+        json.dump(config, f, indent=2)
+
     # Step 4: Create datasets
     print("Step 4: Creating datasets...")
     train_dataset = GEDINeuralProcessDataset(
@@ -313,14 +331,16 @@ def main():
         min_shots_per_tile=args.min_shots_per_tile,
         log_transform_agbd=args.log_transform_agbd,
         augment_coords=args.augment_coords,
-        coord_noise_std=args.coord_noise_std
+        coord_noise_std=args.coord_noise_std,
+        global_bounds=global_bounds
     )
     val_dataset = GEDINeuralProcessDataset(
         val_df,
         min_shots_per_tile=args.min_shots_per_tile,
         log_transform_agbd=args.log_transform_agbd,
         augment_coords=False,  # No augmentation for validation
-        coord_noise_std=0.0
+        coord_noise_std=0.0,
+        global_bounds=global_bounds
     )
 
     train_loader = DataLoader(
