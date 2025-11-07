@@ -26,6 +26,51 @@ from data.dataset import GEDINeuralProcessDataset, collate_neural_process
 from models.neural_process import GEDINeuralProcess
 
 
+def denormalize_agbd(agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
+    """
+    Convert normalized AGBD back to raw values (Mg/ha).
+
+    Reverses the transformation: log(1+x) / log(1+scale)
+
+    Args:
+        agbd_norm: Normalized AGBD values
+        agbd_scale: Scale factor (default: 200.0)
+
+    Returns:
+        Raw AGBD values in Mg/ha
+    """
+    return np.expm1(agbd_norm * np.log1p(agbd_scale))
+
+
+def denormalize_std(std_norm: np.ndarray, agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
+    """
+    Convert normalized standard deviation to raw values (Mg/ha).
+
+    Uses the derivative of the log transform at the predicted mean:
+    d/dx[log(1+x)] = 1/(1+x)
+
+    For log-normal distributions, the standard deviation transforms as:
+    std_raw ≈ std_norm * log(1+scale) * (1 + mean_raw)
+
+    Args:
+        std_norm: Normalized standard deviation
+        agbd_norm: Normalized AGBD mean values (for proper scaling)
+        agbd_scale: Scale factor (default: 200.0)
+
+    Returns:
+        Raw standard deviation in Mg/ha
+    """
+    # Denormalize the mean first to get the scale factor
+    mean_raw = denormalize_agbd(agbd_norm, agbd_scale)
+
+    # Transform std using derivative of log at the mean
+    # For log(1+x), derivative is 1/(1+x), but we're in normalized space
+    # so we need to scale by log(1+scale) and multiply by (1+mean_raw)
+    std_raw = std_norm * np.log1p(agbd_scale) * (1 + mean_raw)
+
+    return std_raw
+
+
 def plot_learning_curves(history_path, output_path):
     """
     Plot training and validation loss curves.
@@ -163,7 +208,7 @@ def plot_spatial_splits(train_csv, val_csv, test_csv, output_path):
     print(f"✓ Saved spatial splits visualization to: {output_path}")
 
 
-def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=None):
+def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=None, agbd_scale=200.0):
     """
     Plot sample predictions with uncertainty bands.
 
@@ -173,6 +218,7 @@ def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=Non
         device: torch device
         n_samples: Number of sample tiles to plot
         output_path: Path to save the plot
+        agbd_scale: AGBD scale factor for denormalization (default: 200.0)
     """
     model.eval()
 
@@ -205,14 +251,19 @@ def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=Non
                 training=False
             )
 
-            # Convert to numpy
-            pred_mean_np = pred_mean.squeeze().cpu().numpy()
-            target_np = target_agbd.squeeze().cpu().numpy()
+            # Convert to numpy (normalized values)
+            pred_mean_norm = pred_mean.squeeze().cpu().numpy()
+            target_norm = target_agbd.squeeze().cpu().numpy()
 
             if pred_log_var is not None:
-                pred_std_np = torch.exp(0.5 * pred_log_var).squeeze().cpu().numpy()
+                pred_std_norm = torch.exp(0.5 * pred_log_var).squeeze().cpu().numpy()
             else:
-                pred_std_np = np.zeros_like(pred_mean_np)
+                pred_std_norm = np.zeros_like(pred_mean_norm)
+
+            # Denormalize from log scale to linear AGBD (Mg/ha)
+            pred_mean_np = denormalize_agbd(pred_mean_norm, agbd_scale)
+            target_np = denormalize_agbd(target_norm, agbd_scale)
+            pred_std_np = denormalize_std(pred_std_norm, pred_mean_norm, agbd_scale)
 
             # Sort by target value for better visualization
             sort_idx = np.argsort(target_np)
@@ -247,8 +298,8 @@ def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=Non
             within_2sigma = np.sum(np.abs(target_np - pred_mean_np) <= 2*pred_std_np) / len(target_np) * 100
 
             ax.set_xlabel('Sample Index (sorted by ground truth)', fontsize=10, fontweight='bold')
-            ax.set_ylabel('AGBD', fontsize=10, fontweight='bold')
-            ax.set_title(f'Tile {tile_idx} | RMSE: {rmse:.3f}, MAE: {mae:.3f}, R²: {r2:.3f} | '
+            ax.set_ylabel('AGBD (Mg/ha)', fontsize=10, fontweight='bold')
+            ax.set_title(f'Tile {tile_idx} | RMSE: {rmse:.2f}, MAE: {mae:.2f}, R²: {r2:.3f} | '
                         f'Coverage: {within_1sigma:.0f}% (1σ), {within_2sigma:.0f}% (2σ)',
                         fontsize=11)
             ax.legend(loc='best', fontsize=9)
@@ -261,7 +312,7 @@ def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=Non
     print(f"✓ Saved sample predictions to: {output_path}")
 
 
-def plot_uncertainty_calibration(model, dataset, device, output_path):
+def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale=200.0):
     """
     Analyze uncertainty calibration: where does ground truth fall in predicted distribution?
 
@@ -270,6 +321,7 @@ def plot_uncertainty_calibration(model, dataset, device, output_path):
         dataset: GEDINeuralProcessDataset
         device: torch device
         output_path: Path to save the plot
+        agbd_scale: AGBD scale factor for denormalization (default: 200.0)
     """
     model.eval()
 
@@ -303,13 +355,19 @@ def plot_uncertainty_calibration(model, dataset, device, output_path):
                 training=False
             )
 
-            pred_mean_np = pred_mean.squeeze().cpu().numpy()
-            target_np = target_agbd.squeeze().cpu().numpy()
+            # Convert to numpy (normalized values)
+            pred_mean_norm = pred_mean.squeeze().cpu().numpy()
+            target_norm = target_agbd.squeeze().cpu().numpy()
 
             if pred_log_var is not None:
-                pred_std_np = torch.exp(0.5 * pred_log_var).squeeze().cpu().numpy()
+                pred_std_norm = torch.exp(0.5 * pred_log_var).squeeze().cpu().numpy()
             else:
-                pred_std_np = np.zeros_like(pred_mean_np)
+                pred_std_norm = np.zeros_like(pred_mean_norm)
+
+            # Denormalize from log scale to linear AGBD (Mg/ha)
+            pred_mean_np = denormalize_agbd(pred_mean_norm, agbd_scale)
+            target_np = denormalize_agbd(target_norm, agbd_scale)
+            pred_std_np = denormalize_std(pred_std_norm, pred_mean_norm, agbd_scale)
 
             all_pred_means.extend(pred_mean_np)
             all_pred_stds.extend(pred_std_np)
@@ -409,8 +467,8 @@ def plot_uncertainty_calibration(model, dataset, device, output_path):
     max_val = max(max(bin_stds), max(bin_errors))
     ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Calibration')
 
-    ax.set_xlabel('Predicted Uncertainty (σ)', fontsize=11, fontweight='bold')
-    ax.set_ylabel('Actual Error (|pred - true|)', fontsize=11, fontweight='bold')
+    ax.set_xlabel('Predicted Uncertainty (σ) [Mg/ha]', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Actual Error (|pred - true|) [Mg/ha]', fontsize=11, fontweight='bold')
     ax.set_title('Uncertainty vs Error', fontsize=12)
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
@@ -540,17 +598,21 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
 
     # Generate sample predictions if model and dataset are loaded
     if model is not None and val_dataset is not None:
+        agbd_scale = config.get('agbd_scale', 200.0)
         plot_sample_predictions(
             model, val_dataset, device, n_samples=n_sample_plots,
-            output_path=model_dir / 'diagnostics_sample_predictions.png'
+            output_path=model_dir / 'diagnostics_sample_predictions.png',
+            agbd_scale=agbd_scale
         )
 
     # 4. Uncertainty calibration
     print("\n[4/4] Analyzing uncertainty calibration...")
     if model is not None and val_dataset is not None:
+        agbd_scale = config.get('agbd_scale', 200.0)
         plot_uncertainty_calibration(
             model, val_dataset, device,
-            output_path=model_dir / 'diagnostics_uncertainty_calibration.png'
+            output_path=model_dir / 'diagnostics_uncertainty_calibration.png',
+            agbd_scale=agbd_scale
         )
     else:
         print("  ⚠ Required files not found, skipping")
