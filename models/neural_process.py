@@ -1,9 +1,3 @@
-"""
-Neural Process architecture for GEDI AGB interpolation.
-
-Implements Conditional Neural Process (CNP) with attention mechanisms.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
