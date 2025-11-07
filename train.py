@@ -4,6 +4,7 @@ Training script for GEDI Neural Process model.
 
 import argparse
 import json
+import os
 from pathlib import Path
 import pickle
 
@@ -13,6 +14,9 @@ from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
+# Set PyTorch memory allocator to use expandable segments to reduce fragmentation
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
@@ -102,13 +106,10 @@ def train_epoch(model, dataloader, optimizer, device):
     n_tiles = 0
 
     for batch in tqdm(dataloader, desc='Training'):
-        optimizer.zero_grad()
-
-        batch_loss = 0
-        n_tiles_in_batch = 0
-
-        # Process each tile in the batch
+        # Process each tile separately to reduce memory usage
         for i in range(len(batch['context_coords'])):
+            optimizer.zero_grad()
+
             context_coords = batch['context_coords'][i].to(device)
             context_embeddings = batch['context_embeddings'][i].to(device)
             context_agbd = batch['context_agbd'][i].to(device)
@@ -134,23 +135,28 @@ def train_epoch(model, dataloader, optimizer, device):
 
             # Check for NaN/Inf
             if torch.isnan(loss) or torch.isinf(loss):
-                print(f"Warning: NaN/Inf loss detected in training! Skipping batch.")
+                print(f"Warning: NaN/Inf loss detected in training! Skipping tile.")
                 continue
 
-            batch_loss += loss
-            n_tiles_in_batch += 1
-
-        if n_tiles_in_batch > 0:
-            batch_loss = batch_loss / n_tiles_in_batch
-            batch_loss.backward()
+            # Backward pass
+            loss.backward()
 
             # Gradient clipping to prevent exploding gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
+            # Update weights
             optimizer.step()
 
-            total_loss += batch_loss.item()
-            n_tiles += n_tiles_in_batch
+            # Track loss
+            total_loss += loss.item()
+            n_tiles += 1
+
+            # Clear CUDA cache periodically to reduce fragmentation
+            if n_tiles % 10 == 0:
+                torch.cuda.empty_cache()
+
+    # Final cache clear at end of epoch
+    torch.cuda.empty_cache()
 
     return total_loss / max(n_tiles, 1)
 
@@ -219,6 +225,9 @@ def validate(model, dataloader, device):
     if len(all_metrics) > 0:
         for key in all_metrics[0].keys():
             avg_metrics[key] = np.mean([m[key] for m in all_metrics])
+
+    # Clear CUDA cache after validation
+    torch.cuda.empty_cache()
 
     return avg_loss, avg_metrics
 
