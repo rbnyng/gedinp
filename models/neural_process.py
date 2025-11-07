@@ -323,25 +323,31 @@ class GEDINeuralProcess(nn.Module):
 def neural_process_loss(
     pred_mean: torch.Tensor,
     pred_log_var: Optional[torch.Tensor],
-    target: torch.Tensor
+    target: torch.Tensor,
+    variance_penalty: float = 0.01
 ) -> torch.Tensor:
     """
-    Negative log-likelihood loss for Neural Process.
+    Negative log-likelihood loss for Neural Process with variance regularization.
 
     Args:
         pred_mean: Predicted means (batch, 1)
         pred_log_var: Predicted log variances (batch, 1) or None
         target: Target values (batch, 1)
+        variance_penalty: Penalty weight for high variance predictions (default: 0.01)
 
     Returns:
         Scalar loss
     """
     if pred_log_var is not None:
         # Gaussian negative log-likelihood
-        loss = 0.5 * (
+        nll_loss = 0.5 * (
             pred_log_var +
             torch.exp(-pred_log_var) * (target - pred_mean) ** 2
         )
+        # Add penalty to prevent variance inflation
+        # Penalize high variance to encourage better mean predictions
+        variance_reg = variance_penalty * torch.exp(pred_log_var)
+        loss = nll_loss + variance_reg
     else:
         # MSE loss
         loss = (target - pred_mean) ** 2
@@ -387,5 +393,11 @@ def compute_metrics(
     if pred_std is not None:
         pred_std = pred_std.detach().cpu().numpy().flatten()
         metrics['mean_uncertainty'] = pred_std.mean()
+
+        # Calibration: ratio of actual error to predicted uncertainty
+        # Should be close to 1.0 if well-calibrated
+        actual_errors = abs(pred_mean - target)
+        calibration_ratio = (actual_errors / (pred_std + 1e-8)).mean()
+        metrics['calibration_ratio'] = calibration_ratio
 
     return metrics

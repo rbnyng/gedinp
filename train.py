@@ -57,17 +57,17 @@ def parse_args():
                         help='Learning rate')
     parser.add_argument('--epochs', type=int, default=100,
                         help='Number of epochs')
-    parser.add_argument('--val_ratio', type=float, default=0.15,
+    parser.add_argument('--val_ratio', type=float, default=0.2,
                         help='Validation set ratio')
     parser.add_argument('--test_ratio', type=float, default=0.15,
                         help='Test set ratio')
     parser.add_argument('--min_shots_per_tile', type=int, default=10,
                         help='Minimum GEDI shots per tile')
-    parser.add_argument('--early_stopping_patience', type=int, default=10,
+    parser.add_argument('--early_stopping_patience', type=int, default=15,
                         help='Early stopping patience (epochs)')
-    parser.add_argument('--lr_scheduler_patience', type=int, default=5,
+    parser.add_argument('--lr_scheduler_patience', type=int, default=10,
                         help='LR scheduler patience (epochs)')
-    parser.add_argument('--lr_scheduler_factor', type=float, default=0.5,
+    parser.add_argument('--lr_scheduler_factor', type=float, default=0.7,
                         help='LR scheduler reduction factor')
 
     # Output arguments
@@ -338,10 +338,10 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    # Learning rate scheduler
+    # Learning rate scheduler - track R² (maximize)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        mode='min',
+        mode='max',
         factor=args.lr_scheduler_factor,
         patience=args.lr_scheduler_patience
     )
@@ -353,6 +353,7 @@ def main():
     epochs_without_improvement = 0
     train_losses = []
     val_losses = []
+    val_r2_history = []
 
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
@@ -373,33 +374,38 @@ def main():
             print(f"Val RMSE:   {val_metrics.get('rmse', 0):.4f}")
             print(f"Val MAE:    {val_metrics.get('mae', 0):.4f}")
             print(f"Val R²:     {val_metrics.get('r2', 0):.4f}")
+            if 'mean_uncertainty' in val_metrics:
+                print(f"Val Uncertainty: {val_metrics.get('mean_uncertainty', 0):.4f}")
+            if 'calibration_ratio' in val_metrics:
+                print(f"Val Calibration: {val_metrics.get('calibration_ratio', 0):.4f} (target: 1.0)")
 
         # Get current learning rate
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Learning Rate: {current_lr:.6e}")
 
-        # Step the learning rate scheduler
-        scheduler.step(val_loss)
+        # Get current R² for scheduler and early stopping
+        current_r2 = val_metrics.get('r2', float('-inf')) if val_metrics else float('-inf')
+        val_r2_history.append(current_r2)
 
-        # Save best model based on validation loss
+        # Step the learning rate scheduler based on R²
+        scheduler.step(current_r2)
+
+        # Save best model based on validation loss (for reference)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            epochs_without_improvement = 0
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': val_loss,
                 'val_metrics': val_metrics
-            }, output_dir / 'best_model.pt')
-            print("✓ Saved best model (lowest val loss)")
-        else:
-            epochs_without_improvement += 1
+            }, output_dir / 'best_loss_model.pt')
+            print("✓ Saved best loss model (lowest val loss)")
 
-        # Save best model based on R²
-        current_r2 = val_metrics.get('r2', float('-inf')) if val_metrics else float('-inf')
+        # Save best model based on R² AND use for early stopping
         if current_r2 > best_r2:
             best_r2 = current_r2
+            epochs_without_improvement = 0
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -407,13 +413,15 @@ def main():
                 'val_loss': val_loss,
                 'val_metrics': val_metrics,
                 'r2': current_r2
-            }, output_dir / 'best_r2_model.pt')
-            print(f"✓ Saved best R² model (R² = {best_r2:.4f})")
+            }, output_dir / 'best_model.pt')
+            print(f"✓ Saved best model (R² = {best_r2:.4f})")
+        else:
+            epochs_without_improvement += 1
 
         # Early stopping check
         if epochs_without_improvement >= args.early_stopping_patience:
             print(f"\nEarly stopping triggered after {epoch} epochs")
-            print(f"No improvement in validation loss for {args.early_stopping_patience} epochs")
+            print(f"No improvement in validation R² for {args.early_stopping_patience} epochs")
             break
 
         # Save checkpoint
@@ -427,7 +435,8 @@ def main():
     # Save training history
     history = {
         'train_losses': train_losses,
-        'val_losses': val_losses
+        'val_losses': val_losses,
+        'val_r2_history': val_r2_history
     }
     with open(output_dir / 'history.json', 'w') as f:
         json.dump(history, f, indent=2)
@@ -436,6 +445,7 @@ def main():
     print("Training complete!")
     print(f"Best validation loss: {best_val_loss:.6e}")
     print(f"Best R² score: {best_r2:.4f}")
+    print(f"Note: Early stopping based on R² (maximizing prediction accuracy)")
     print(f"Models saved to: {output_dir}")
     print("=" * 80)
 
