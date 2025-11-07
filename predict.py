@@ -565,21 +565,9 @@ def create_visualization(
         vmax=min(200, np.nanpercentile(predictions, 99))
     )
 
-    # Overlay context points
-    ax.scatter(
-        context_df['longitude'],
-        context_df['latitude'],
-        c='red',
-        s=20,
-        marker='x',
-        alpha=0.6,
-        label=f'GEDI context (n={len(context_df)})'
-    )
-
     ax.set_xlabel('Longitude', fontweight='bold')
     ax.set_ylabel('Latitude', fontweight='bold')
-    ax.set_title('Mean AGB Prediction', fontsize=14, fontweight='bold')
-    ax.legend()
+    ax.set_title('Mean AGB Prediction')
     ax.grid(True, alpha=0.3)
 
     cbar1 = plt.colorbar(im1, ax=ax)
@@ -596,38 +584,13 @@ def create_visualization(
         vmax=np.nanpercentile(uncertainties, 95)
     )
 
-    # Overlay context points
-    ax.scatter(
-        context_df['longitude'],
-        context_df['latitude'],
-        c='blue',
-        s=20,
-        marker='x',
-        alpha=0.6,
-        label=f'GEDI context (n={len(context_df)})'
-    )
-
     ax.set_xlabel('Longitude', fontweight='bold')
     ax.set_ylabel('Latitude', fontweight='bold')
-    ax.set_title('Prediction Uncertainty (Std)', fontsize=14, fontweight='bold')
-    ax.legend()
+    ax.set_title('Prediction Uncertainty (Std)')
     ax.grid(True, alpha=0.3)
 
     cbar2 = plt.colorbar(im2, ax=ax)
     cbar2.set_label('Uncertainty (Mg/ha)', fontweight='bold')
-
-    # Add summary statistics
-    min_lon, min_lat, max_lon, max_lat = region_bbox
-    stats_text = (
-        f"Region: [{min_lon:.3f}, {min_lat:.3f}] to [{max_lon:.3f}, {max_lat:.3f}]\n"
-        f"Mean AGB: {np.nanmean(predictions):.1f} ± {np.nanstd(predictions):.1f} Mg/ha\n"
-        f"Mean Uncertainty: {np.nanmean(uncertainties):.1f} Mg/ha\n"
-        f"Grid size: {n_rows} × {n_cols}"
-    )
-
-    fig.text(0.5, 0.02, stats_text, ha='center', fontsize=10,
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.12)
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
