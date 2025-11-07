@@ -221,7 +221,7 @@ def visualize_predictions(
     context_df, output_dir, tile_lon, tile_lat
 ):
     """Create visualization plots."""
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(18, 5))
 
     # Plot 1: Predicted AGBD
     sc1 = axes[0].scatter(
@@ -231,7 +231,7 @@ def visualize_predictions(
     )
     axes[0].scatter(
         context_df['longitude'], context_df['latitude'],
-        c='red', marker='x', s=20, label='GEDI context'
+        c='red', marker='x', s=0.1, label='GEDI context'
     )
     axes[0].set_xlabel('Longitude')
     axes[0].set_ylabel('Latitude')
@@ -249,14 +249,6 @@ def visualize_predictions(
     axes[1].set_ylabel('Latitude')
     axes[1].set_title('Prediction Uncertainty (Std Dev)')
     plt.colorbar(sc2, ax=axes[1], label='Std Dev (Mg/ha)')
-
-    # Plot 3: Histogram
-    axes[2].hist(pred_means, bins=50, alpha=0.7, label='Predicted AGBD')
-    axes[2].hist(context_df['agbd'], bins=50, alpha=0.7, label='GEDI Context')
-    axes[2].set_xlabel('AGBD (Mg/ha)')
-    axes[2].set_ylabel('Frequency')
-    axes[2].set_title('AGBD Distribution')
-    axes[2].legend()
 
     plt.tight_layout()
     output_path = output_dir / f'visualization_tile_{tile_lon:.2f}_{tile_lat:.2f}.png'
