@@ -99,12 +99,13 @@ def train_epoch(model, dataloader, optimizer, device):
     """Train for one epoch."""
     model.train()
     total_loss = 0
-    n_batches = 0
+    n_tiles = 0
 
     for batch in tqdm(dataloader, desc='Training'):
         optimizer.zero_grad()
 
         batch_loss = 0
+        n_tiles_in_batch = 0
 
         # Process each tile in the batch
         for i in range(len(batch['context_coords'])):
@@ -130,17 +131,28 @@ def train_epoch(model, dataloader, optimizer, device):
 
             # Compute loss
             loss = neural_process_loss(pred_mean, pred_log_var, target_agbd)
-            batch_loss += loss
 
-        if batch_loss > 0:
-            batch_loss = batch_loss / len(batch['context_coords'])
+            # Check for NaN/Inf
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"Warning: NaN/Inf loss detected in training! Skipping batch.")
+                continue
+
+            batch_loss += loss
+            n_tiles_in_batch += 1
+
+        if n_tiles_in_batch > 0:
+            batch_loss = batch_loss / n_tiles_in_batch
             batch_loss.backward()
+
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer.step()
 
             total_loss += batch_loss.item()
-            n_batches += 1
+            n_tiles += n_tiles_in_batch
 
-    return total_loss / max(n_batches, 1)
+    return total_loss / max(n_tiles, 1)
 
 
 def validate(model, dataloader, device):
@@ -148,11 +160,12 @@ def validate(model, dataloader, device):
     model.eval()
     total_loss = 0
     all_metrics = []
-    n_batches = 0
+    n_tiles = 0
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc='Validation'):
             batch_loss = 0
+            n_tiles_in_batch = 0
 
             for i in range(len(batch['context_coords'])):
                 context_coords = batch['context_coords'][i].to(device)
@@ -176,19 +189,30 @@ def validate(model, dataloader, device):
 
                 # Compute loss
                 loss = neural_process_loss(pred_mean, pred_log_var, target_agbd)
+
+                # Check for NaN/Inf
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"Warning: NaN/Inf loss detected in validation!")
+                    print(f"  pred_mean range: [{pred_mean.min():.4f}, {pred_mean.max():.4f}]")
+                    if pred_log_var is not None:
+                        print(f"  pred_log_var range: [{pred_log_var.min():.4f}, {pred_log_var.max():.4f}]")
+                    print(f"  target range: [{target_agbd.min():.4f}, {target_agbd.max():.4f}]")
+                    continue
+
                 batch_loss += loss
+                n_tiles_in_batch += 1
 
                 # Compute metrics
                 pred_std = torch.exp(0.5 * pred_log_var) if pred_log_var is not None else None
                 metrics = compute_metrics(pred_mean, pred_std, target_agbd)
                 all_metrics.append(metrics)
 
-            if batch_loss > 0:
-                batch_loss = batch_loss / len(batch['context_coords'])
+            if n_tiles_in_batch > 0:
+                batch_loss = batch_loss / n_tiles_in_batch
                 total_loss += batch_loss.item()
-                n_batches += 1
+                n_tiles += n_tiles_in_batch
 
-    avg_loss = total_loss / max(n_batches, 1)
+    avg_loss = total_loss / max(n_tiles, 1)
 
     # Aggregate metrics
     avg_metrics = {}
