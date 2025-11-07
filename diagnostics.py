@@ -203,13 +203,13 @@ def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=Non
         for idx, tile_idx in enumerate(indices):
             sample = dataset[tile_idx]
 
-            # Move to device
-            context_coords = sample['context_coords'].unsqueeze(0).to(device)
-            context_embeddings = sample['context_embeddings'].unsqueeze(0).to(device)
-            context_agbd = sample['context_agbd'].unsqueeze(0).to(device)
-            target_coords = sample['target_coords'].unsqueeze(0).to(device)
-            target_embeddings = sample['target_embeddings'].unsqueeze(0).to(device)
-            target_agbd = sample['target_agbd'].unsqueeze(0).to(device)
+            # Move to device (no unsqueeze needed - model expects (n_points, ...) directly)
+            context_coords = sample['context_coords'].to(device)
+            context_embeddings = sample['context_embeddings'].to(device)
+            context_agbd = sample['context_agbd'].to(device)
+            target_coords = sample['target_coords'].to(device)
+            target_embeddings = sample['target_embeddings'].to(device)
+            target_agbd = sample['target_agbd'].to(device)
 
             # Forward pass
             pred_mean, pred_log_var, _, _ = model(
@@ -299,14 +299,15 @@ def plot_uncertainty_calibration(model, dataset, device, output_path):
 
     with torch.no_grad():
         for sample in tqdm(dataloader, desc='Computing calibration'):
-            context_coords = sample['context_coords'].unsqueeze(0).to(device)
-            context_embeddings = sample['context_embeddings'].unsqueeze(0).to(device)
-            context_agbd = sample['context_agbd'].unsqueeze(0).to(device)
-            target_coords = sample['target_coords'].unsqueeze(0).to(device)
-            target_embeddings = sample['target_embeddings'].unsqueeze(0).to(device)
-            target_agbd = sample['target_agbd'].unsqueeze(0).to(device)
+            # Move to device (no unsqueeze needed - model expects (n_points, ...) directly)
+            context_coords = sample['context_coords'].to(device)
+            context_embeddings = sample['context_embeddings'].to(device)
+            context_agbd = sample['context_agbd'].to(device)
+            target_coords = sample['target_coords'].to(device)
+            target_embeddings = sample['target_embeddings'].to(device)
+            target_agbd = sample['target_agbd'].to(device)
 
-            if len(target_coords[0]) == 0:
+            if len(target_coords) == 0:
                 continue
 
             pred_mean, pred_log_var, _, _ = model(
