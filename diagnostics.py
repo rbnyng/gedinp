@@ -126,6 +126,15 @@ def plot_spatial_splits(train_csv, val_csv, test_csv, output_path):
             )
             ax1.add_patch(rect)
 
+    # Set axis limits based on tile bounds
+    if all_tiles:
+        all_lons = [tile['min_lon'] for tile in all_tiles] + [tile['max_lon'] for tile in all_tiles]
+        all_lats = [tile['min_lat'] for tile in all_tiles] + [tile['max_lat'] for tile in all_tiles]
+        lon_margin = (max(all_lons) - min(all_lons)) * 0.05  # 5% margin
+        lat_margin = (max(all_lats) - min(all_lats)) * 0.05
+        ax1.set_xlim(min(all_lons) - lon_margin, max(all_lons) + lon_margin)
+        ax1.set_ylim(min(all_lats) - lat_margin, max(all_lats) + lat_margin)
+
     ax1.set_xlabel('Longitude', fontsize=12, fontweight='bold')
     ax1.set_ylabel('Latitude', fontsize=12, fontweight='bold')
     ax1.set_title('Spatial Distribution of Tiles', fontsize=14, fontweight='bold')
