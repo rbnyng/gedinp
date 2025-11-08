@@ -52,7 +52,7 @@ def parse_args():
                         help='Context representation dimension')
     parser.add_argument('--latent_dim', type=int, default=128,
                         help='Latent variable dimension')
-    parser.add_argument('--architecture_mode', type=str, default='deterministic',
+    parser.add_argument('--architecture_mode', type=str, default='anp',
                         choices=['deterministic', 'latent', 'anp', 'cnp'],
                         help='Architecture mode: deterministic (attention only), '
                              'latent (stochastic only), anp (both), cnp (baseline)')
