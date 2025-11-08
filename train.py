@@ -29,15 +29,15 @@ def parse_args():
     # Data arguments
     parser.add_argument('--region_bbox', type=float, nargs=4, required=True,
                         help='Region bounding box: min_lon min_lat max_lon max_lat')
-    parser.add_argument('--start_time', type=str, default='2019-01-01',
+    parser.add_argument('--start_time', type=str, default='2022-01-01',
                         help='Start date for GEDI data (YYYY-MM-DD)')
-    parser.add_argument('--end_time', type=str, default='2023-12-31',
+    parser.add_argument('--end_time', type=str, default='2022-12-31',
                         help='End date for GEDI data (YYYY-MM-DD)')
     parser.add_argument('--train_years', type=int, nargs='+', default=None,
                         help='Specific years to use for training (e.g., 2019 2020 2021). '
                              'If specified, only GEDI shots from these years will be used '
                              'for training, enabling temporal validation on held-out years.')
-    parser.add_argument('--embedding_year', type=int, default=2024,
+    parser.add_argument('--embedding_year', type=int, default=2022,
                         help='Year of GeoTessera embeddings')
     parser.add_argument('--cache_dir', type=str, default='./cache',
                         help='Directory for caching tiles and embeddings')
