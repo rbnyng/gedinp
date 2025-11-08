@@ -17,9 +17,9 @@ from data.spatial_cv import SpatialTileSplitter
 from models.neural_process import (
     GEDINeuralProcess,
     neural_process_loss,
-    compute_metrics
 )
 from diagnostics import generate_all_diagnostics
+from utils.evaluation import compute_metrics
 
 
 def parse_args():
