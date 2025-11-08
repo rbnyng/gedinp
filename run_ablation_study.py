@@ -1,13 +1,3 @@
-"""
-Run ablation study comparing all architecture variants.
-
-This script trains and evaluates:
-1. CNP baseline (mean pooling, no attention, no latent)
-2. Deterministic (attention only, no latent)
-3. Latent (latent only, no attention)
-4. Full ANP (attention + latent)
-"""
-
 import argparse
 import json
 import subprocess
@@ -17,10 +7,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from datetime import datetime
-
+import torch
 
 def run_training(base_args, architecture_mode, output_subdir):
-    """Run training for a specific architecture mode."""
     print("=" * 80)
     print(f"Training: {architecture_mode}")
     print("=" * 80)
@@ -44,20 +33,16 @@ def run_training(base_args, architecture_mode, output_subdir):
         '--kl_warmup_epochs', str(base_args['kl_warmup_epochs'])
     ]
 
-    # Run training
     result = subprocess.run(cmd, capture_output=False)
 
     if result.returncode != 0:
         print(f"Warning: Training failed for {architecture_mode}")
         return None
 
-    # Load results
     try:
         with open(output_subdir / 'config.json', 'r') as f:
             config = json.load(f)
 
-        # Load best model metrics
-        import torch
         checkpoint = torch.load(output_subdir / 'best_r2_model.pt',
                                map_location='cpu')
 
@@ -74,9 +59,6 @@ def run_training(base_args, architecture_mode, output_subdir):
 
 
 def compare_results(results, output_dir):
-    """Compare and visualize results from all variants."""
-
-    # Create DataFrame
     rows = []
     for res in results:
         if res is None:
@@ -96,7 +78,6 @@ def compare_results(results, output_dir):
     # Sort by R² (descending)
     df = df.sort_values('R²', ascending=False)
 
-    # Save results table
     df.to_csv(output_dir / 'ablation_results.csv', index=False)
 
     print("\n" + "=" * 80)
@@ -105,7 +86,6 @@ def compare_results(results, output_dir):
     print(df.to_string(index=False))
     print("=" * 80)
 
-    # Create visualizations
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     fig.suptitle('Architecture Ablation Study', fontsize=16, fontweight='bold')
 
@@ -175,14 +155,12 @@ def compare_results(results, output_dir):
         total = base_params + attention_params + latent_params
         param_counts[mode] = total
 
-    # Save parameter comparison
     param_df = pd.DataFrame([
         {'Architecture': k, 'Parameters': v}
         for k, v in param_counts.items()
     ])
     param_df.to_csv(output_dir / 'parameter_counts.csv', index=False)
 
-    # Create summary report
     with open(output_dir / 'ablation_summary.txt', 'w') as f:
         f.write("=" * 80 + "\n")
         f.write("ABLATION STUDY SUMMARY\n")
@@ -201,7 +179,6 @@ def compare_results(results, output_dir):
         f.write("-" * 80 + "\n\n")
         f.write(df.to_string(index=False) + "\n\n")
 
-        # Best model
         best = df.iloc[0]
         f.write("-" * 80 + "\n")
         f.write("BEST ARCHITECTURE\n")
@@ -210,11 +187,6 @@ def compare_results(results, output_dir):
         f.write(f"R² Score: {best['R²']:.4f}\n")
         f.write(f"RMSE: {best['RMSE']:.4f}\n")
         f.write(f"MAE: {best['MAE']:.4f}\n\n")
-
-        # Key insights
-        f.write("-" * 80 + "\n")
-        f.write("KEY INSIGHTS\n")
-        f.write("-" * 80 + "\n")
 
         cnp_r2 = df[df['Architecture'] == 'cnp']['R²'].values[0] if 'cnp' in df['Architecture'].values else None
         det_r2 = df[df['Architecture'] == 'deterministic']['R²'].values[0] if 'deterministic' in df['Architecture'].values else None
@@ -282,11 +254,9 @@ def main():
 
     args = parser.parse_args()
 
-    # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save ablation config
     with open(output_dir / 'ablation_config.json', 'w') as f:
         json.dump(vars(args), f, indent=2)
 
@@ -297,7 +267,6 @@ def main():
     print(f"Architectures to test: {args.architectures}")
     print("=" * 80)
 
-    # Base arguments for training
     base_args = {
         'region_bbox': args.region_bbox,
         'start_time': args.start_time,
@@ -314,7 +283,6 @@ def main():
         'kl_warmup_epochs': args.kl_warmup_epochs
     }
 
-    # Run training for each architecture
     results = []
     for arch in args.architectures:
         output_subdir = output_dir / arch
@@ -323,7 +291,6 @@ def main():
         result = run_training(base_args, arch, output_subdir)
         results.append(result)
 
-    # Compare results
     compare_results(results, output_dir)
 
     print("\n" + "=" * 80)

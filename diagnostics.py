@@ -1,13 +1,3 @@
-"""
-Post-training diagnostics and visualization for GEDI Neural Process.
-
-This module generates comprehensive diagnostic plots after training:
-- Sample predictions with uncertainty bands
-- Spatial tile splitting visualization
-- Learning curves
-- Uncertainty calibration
-"""
-
 import json
 import pickle
 from pathlib import Path
@@ -27,18 +17,6 @@ from models.neural_process import GEDINeuralProcess
 
 
 def denormalize_agbd(agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    """
-    Convert normalized AGBD back to raw values (Mg/ha).
-
-    Reverses the transformation: log(1+x) / log(1+scale)
-
-    Args:
-        agbd_norm: Normalized AGBD values
-        agbd_scale: Scale factor (default: 200.0)
-
-    Returns:
-        Raw AGBD values in Mg/ha
-    """
     return np.expm1(agbd_norm * np.log1p(agbd_scale))
 
 

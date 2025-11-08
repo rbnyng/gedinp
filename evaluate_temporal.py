@@ -99,12 +99,10 @@ def evaluate_model(model, dataloader, device):
 
 
 def plot_results(predictions, targets, uncertainties, output_dir, dataset_name='temporal'):
-    """Create evaluation plots."""
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     fig.suptitle(f'Temporal Validation: {dataset_name}', fontsize=16, fontweight='bold')
 
-    # 1. Scatter plot with perfect prediction line
     ax = axes[0, 0]
     ax.scatter(targets, predictions, alpha=0.3, s=10)
     min_val = min(targets.min(), predictions.min())
@@ -116,14 +114,12 @@ def plot_results(predictions, targets, uncertainties, output_dir, dataset_name='
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # Add R² to plot
     ss_res = ((targets - predictions) ** 2).sum()
     ss_tot = ((targets - targets.mean()) ** 2).sum()
     r2 = 1 - ss_res / (ss_tot + 1e-8)
     ax.text(0.05, 0.95, f'R² = {r2:.4f}', transform=ax.transAxes,
             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-    # 2. Residual plot
     ax = axes[0, 1]
     residuals = predictions - targets
     ax.scatter(predictions, residuals, alpha=0.3, s=10)
@@ -133,7 +129,6 @@ def plot_results(predictions, targets, uncertainties, output_dir, dataset_name='
     ax.set_title('Residual Plot')
     ax.grid(True, alpha=0.3)
 
-    # 3. Error distribution
     ax = axes[1, 0]
     ax.hist(residuals, bins=50, edgecolor='black', alpha=0.7)
     ax.axvline(x=0, color='r', linestyle='--', linewidth=2)
@@ -142,22 +137,18 @@ def plot_results(predictions, targets, uncertainties, output_dir, dataset_name='
     ax.set_title('Distribution of Residuals')
     ax.grid(True, alpha=0.3, axis='y')
 
-    # Add RMSE and MAE
     rmse = np.sqrt(np.mean(residuals ** 2))
     mae = np.mean(np.abs(residuals))
     ax.text(0.05, 0.95, f'RMSE = {rmse:.4f}\nMAE = {mae:.4f}',
             transform=ax.transAxes, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-    # 4. Uncertainty calibration
     ax = axes[1, 1]
     if uncertainties is not None and uncertainties.std() > 0:
-        # Sort by uncertainty
         sorted_indices = np.argsort(uncertainties)
         sorted_uncertainties = uncertainties[sorted_indices]
         sorted_errors = np.abs(residuals[sorted_indices])
 
-        # Bin by uncertainty
         n_bins = 20
         bin_size = len(sorted_uncertainties) // n_bins
         bin_uncertainties = []
@@ -240,26 +231,22 @@ def main():
     print(f"Device: {args.device}")
     print()
 
-    # Use region from config if not specified
     if args.region_bbox is None:
         args.region_bbox = config['region_bbox']
         print(f"Using training region bbox: {args.region_bbox}")
 
-    # Create output suffix
     if args.output_suffix is None:
         years_str = '_'.join(map(str, args.test_years))
         output_suffix = f"years_{years_str}"
     else:
         output_suffix = args.output_suffix
 
-    # Step 1: Query GEDI data for temporal holdout years
     print("\n" + "=" * 80)
     print("Step 1: Querying GEDI data for temporal holdout...")
     print("=" * 80)
 
     querier = GEDIQuerier()
 
-    # Query each year separately and combine
     all_gedi_dfs = []
     for year in args.test_years:
         print(f"\nQuerying year {year}...")
@@ -285,7 +272,6 @@ def main():
     print(f"\nTotal: {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
     print(f"Shots per year: {dict(gedi_df['year'].value_counts().sort_index())}")
 
-    # Step 2: Extract embeddings
     print("\n" + "=" * 80)
     print("Step 2: Extracting GeoTessera embeddings...")
     print("=" * 80)
@@ -297,17 +283,14 @@ def main():
     )
     gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
 
-    # Filter out shots without embeddings
     gedi_df = gedi_df[gedi_df['embedding_patch'].notna()]
     print(f"Retained {len(gedi_df)} shots with valid embeddings")
 
-    # Save processed temporal data
     temporal_data_path = model_dir / f'temporal_data_{output_suffix}.pkl'
     with open(temporal_data_path, 'wb') as f:
         pickle.dump(gedi_df, f)
     print(f"Saved temporal data to: {temporal_data_path}")
 
-    # Step 3: Create dataset
     print("\n" + "=" * 80)
     print("Step 3: Creating evaluation dataset...")
     print("=" * 80)
@@ -332,7 +315,6 @@ def main():
         num_workers=args.num_workers
     )
 
-    # Step 4: Initialize and load model
     print("\n" + "=" * 80)
     print("Step 4: Loading trained model...")
     print("=" * 80)
@@ -361,7 +343,6 @@ def main():
         for key, val in checkpoint['val_metrics'].items():
             print(f"  {key}: {val:.4f}")
 
-    # Step 5: Evaluate
     print("\n" + "=" * 80)
     print("Step 5: Evaluating on temporal holdout...")
     print("=" * 80)
@@ -370,7 +351,6 @@ def main():
         model, eval_loader, args.device
     )
 
-    # Print results
     print("\n" + "=" * 80)
     print(f"TEMPORAL VALIDATION RESULTS (Years: {args.test_years})")
     print("=" * 80)
@@ -378,10 +358,8 @@ def main():
         print(f"{key.upper()}: {val:.4f}")
     print("=" * 80)
 
-    # Step 6: Save results
     print("\nSaving results...")
 
-    # Save metrics
     results = {
         'metrics': metrics,
         'test_years': args.test_years,
@@ -397,7 +375,6 @@ def main():
         json.dump(convert_to_serializable(results), f, indent=2)
     print(f"Saved metrics to: {results_path}")
 
-    # Save predictions
     results_df = pd.DataFrame({
         'true': targets,
         'predicted': predictions,
@@ -408,7 +385,6 @@ def main():
     results_df.to_csv(predictions_path, index=False)
     print(f"Saved predictions to: {predictions_path}")
 
-    # Create plots
     years_label = '_'.join(map(str, args.test_years))
     plot_results(predictions, targets, uncertainties, model_dir, years_label)
 

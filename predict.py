@@ -1,15 +1,3 @@
-"""
-Generate AGB predictions at 10m resolution using trained GEDI Neural Process model.
-
-This script:
-1. Loads a trained model checkpoint
-2. Queries nearest N GEDI shots for context
-3. Generates a dense prediction grid at specified resolution
-4. Runs batched GPU inference
-5. Outputs GeoTIFF files (mean + uncertainty)
-6. Creates visualization by default
-"""
-
 import argparse
 import json
 from pathlib import Path
@@ -64,18 +52,6 @@ def parse_args():
 
 
 def load_model_and_config(checkpoint_dir: Path, device: str):
-    """
-    Load model checkpoint and config.
-
-    Auto-detects config from checkpoint directory.
-
-    Args:
-        checkpoint_dir: Path to checkpoint directory
-        device: Device to load model on
-
-    Returns:
-        (model, config)
-    """
     print("Loading model configuration...")
     config_path = checkpoint_dir / 'config.json'
     if not config_path.exists():
@@ -136,21 +112,6 @@ def query_context_gedi(
     start_time: str,
     end_time: str
 ) -> pd.DataFrame:
-    """
-    Query GEDI shots for context.
-
-    Queries the region and returns up to n_context nearest shots
-    to the region center.
-
-    Args:
-        region_bbox: (min_lon, min_lat, max_lon, max_lat)
-        n_context: Number of context shots to return
-        start_time: Start date for GEDI query
-        end_time: End date for GEDI query
-
-    Returns:
-        DataFrame with GEDI shots
-    """
     print(f"\nQuerying GEDI context shots...")
     print(f"Region: {region_bbox}")
     print(f"Requesting {n_context} nearest shots")
@@ -205,21 +166,10 @@ def generate_prediction_grid(
     region_bbox: tuple,
     resolution_m: float
 ) -> tuple:
-    """
-    Generate a dense prediction grid.
-
-    Args:
-        region_bbox: (min_lon, min_lat, max_lon, max_lat)
-        resolution_m: Resolution in meters
-
-    Returns:
-        (lons, lats, n_rows, n_cols) where lons/lats are 1D arrays
-    """
     min_lon, min_lat, max_lon, max_lat = region_bbox
 
     # Convert resolution to degrees (approximate)
     # At equator: 1 degree ≈ 111km
-    # This is approximate - for proper handling would need to account for latitude
     meters_per_degree = 111000.0
     resolution_deg = resolution_m / meters_per_degree
 
@@ -228,7 +178,6 @@ def generate_prediction_grid(
     lon_resolution_deg = resolution_deg / np.cos(np.radians(center_lat))
     lat_resolution_deg = resolution_deg
 
-    # Generate grid
     lons = np.arange(min_lon, max_lon, lon_resolution_deg)
     lats = np.arange(min_lat, max_lat, lat_resolution_deg)
 
@@ -249,17 +198,6 @@ def extract_embeddings(
     extractor: EmbeddingExtractor,
     desc: str = "Extracting embeddings"
 ) -> pd.DataFrame:
-    """
-    Extract embeddings for coordinates.
-
-    Args:
-        coords_df: DataFrame with 'longitude', 'latitude' columns
-        extractor: EmbeddingExtractor instance
-        desc: Progress bar description
-
-    Returns:
-        DataFrame with added 'embedding_patch' column
-    """
     patches = []
     valid_indices = []
 
@@ -273,7 +211,6 @@ def extract_embeddings(
     print(f"Successfully extracted {len(patches)}/{len(coords_df)} embeddings "
           f"({100*len(patches)/len(coords_df):.1f}%)")
 
-    # Filter to valid only
     result_df = coords_df.loc[valid_indices].copy()
     result_df['embedding_patch'] = patches
 
@@ -281,16 +218,6 @@ def extract_embeddings(
 
 
 def normalize_coords(coords: np.ndarray, global_bounds: tuple) -> np.ndarray:
-    """
-    Normalize coordinates to [0, 1] using global bounds from training.
-
-    Args:
-        coords: (N, 2) array of [lon, lat]
-        global_bounds: (lon_min, lat_min, lon_max, lat_max) from training
-
-    Returns:
-        Normalized coordinates (N, 2)
-    """
     lon_min, lat_min, lon_max, lat_max = global_bounds
 
     lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
@@ -304,50 +231,14 @@ def normalize_coords(coords: np.ndarray, global_bounds: tuple) -> np.ndarray:
 
 
 def normalize_agbd(agbd: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    """
-    Normalize AGBD with log transform (same as training).
-
-    Args:
-        agbd: Raw AGBD values
-        agbd_scale: Scale factor (default: 200.0)
-
-    Returns:
-        Normalized AGBD
-    """
     return np.log1p(agbd) / np.log1p(agbd_scale)
 
 
 def denormalize_agbd(agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    """
-    Convert normalized AGBD back to raw values.
-
-    Args:
-        agbd_norm: Normalized AGBD
-        agbd_scale: Scale factor (default: 200.0)
-
-    Returns:
-        Raw AGBD values
-    """
     return np.expm1(agbd_norm * np.log1p(agbd_scale))
 
 
 def denormalize_std(std_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    """
-    Convert normalized standard deviation to raw values.
-
-    Since std transforms differently than mean under log transform,
-    we use the derivative: d/dx[log(1+x)] = 1/(1+x)
-
-    For small normalized values, approximate std_raw ≈ std_norm * log(1+scale)
-
-    Args:
-        std_norm: Normalized standard deviation
-        agbd_scale: Scale factor (default: 200.0)
-
-    Returns:
-        Approximate raw standard deviation
-    """
-    # Simple linear scaling (approximate)
     return std_norm * np.log1p(agbd_scale)
 
 
@@ -359,42 +250,24 @@ def run_inference(
     batch_size: int,
     device: str
 ) -> tuple:
-    """
-    Run batched inference.
-
-    Args:
-        model: Neural process model
-        context_df: Context GEDI shots with embeddings
-        query_df: Query points with embeddings
-        global_bounds: Global coordinate bounds
-        batch_size: Batch size for inference
-        device: Device
-
-    Returns:
-        (predictions, uncertainties) as numpy arrays
-    """
     print(f"\nRunning inference on {len(query_df)} query points...")
     print(f"Using {len(context_df)} context shots")
     print(f"Batch size: {batch_size}")
     print(f"Device: {device}")
 
-    # Prepare context data (same for all batches)
     context_coords = context_df[['longitude', 'latitude']].values
     context_coords_norm = normalize_coords(context_coords, global_bounds)
     context_embeddings = np.stack(context_df['embedding_patch'].values)
     context_agbd_norm = normalize_agbd(context_df['agbd'].values[:, None])
 
-    # Convert to tensors
     context_coords_t = torch.from_numpy(context_coords_norm).float().to(device)
     context_embeddings_t = torch.from_numpy(context_embeddings).float().to(device)
     context_agbd_t = torch.from_numpy(context_agbd_norm).float().to(device)
 
-    # Prepare query data
     query_coords = query_df[['longitude', 'latitude']].values
     query_coords_norm = normalize_coords(query_coords, global_bounds)
     query_embeddings = np.stack(query_df['embedding_patch'].values)
 
-    # Run inference in batches
     all_predictions = []
     all_uncertainties = []
 
@@ -405,15 +278,12 @@ def run_inference(
             start_idx = i * batch_size
             end_idx = min((i + 1) * batch_size, len(query_df))
 
-            # Get batch
             batch_coords = query_coords_norm[start_idx:end_idx]
             batch_embeddings = query_embeddings[start_idx:end_idx]
 
-            # Convert to tensors
             batch_coords_t = torch.from_numpy(batch_coords).float().to(device)
             batch_embeddings_t = torch.from_numpy(batch_embeddings).float().to(device)
 
-            # Forward pass
             pred_mean, pred_std = model.predict(
                 context_coords_t,
                 context_embeddings_t,
@@ -422,18 +292,15 @@ def run_inference(
                 batch_embeddings_t
             )
 
-            # Convert to numpy
             pred_mean_np = pred_mean.cpu().numpy().flatten()
             pred_std_np = pred_std.cpu().numpy().flatten()
 
             all_predictions.append(pred_mean_np)
             all_uncertainties.append(pred_std_np)
 
-    # Concatenate all batches
     predictions_norm = np.concatenate(all_predictions)
     uncertainties_norm = np.concatenate(all_uncertainties)
 
-    # Denormalize
     predictions = denormalize_agbd(predictions_norm)
     uncertainties = denormalize_std(uncertainties_norm)
 
@@ -453,29 +320,16 @@ def save_geotiff(
     output_path: Path,
     description: str = "AGB"
 ):
-    """
-    Save data as GeoTIFF.
-
-    Args:
-        data: 1D array of values
-        lons: 1D array of longitudes
-        lats: 1D array of latitudes
-        output_path: Output file path
-        description: Data description
-    """
-    # Reshape to 2D grid
     n_rows = len(lats)
     n_cols = len(lons)
     grid = data.reshape(n_rows, n_cols)
 
-    # Create transform
     transform = from_bounds(
         lons[0], lats[0],
         lons[-1], lats[-1],
         n_cols, n_rows
     )
 
-    # Write GeoTIFF
     with rasterio.open(
         output_path,
         'w',
@@ -498,17 +352,9 @@ def save_context_geojson(
     context_df: pd.DataFrame,
     output_path: Path
 ):
-    """
-    Save context points as GeoJSON.
-
-    Args:
-        context_df: Context GEDI shots
-        output_path: Output file path
-    """
     import geopandas as gpd
     from shapely.geometry import Point
 
-    # Create GeoDataFrame
     geometry = [Point(lon, lat) for lon, lat in
                 zip(context_df['longitude'], context_df['latitude'])]
 
@@ -531,27 +377,13 @@ def create_visualization(
     output_path: Path,
     region_bbox: tuple
 ):
-    """
-    Create visualization of predictions and uncertainty.
-
-    Args:
-        predictions: 1D array of predictions
-        uncertainties: 1D array of uncertainties
-        lons: 1D array of longitudes
-        lats: 1D array of latitudes
-        context_df: Context GEDI shots
-        output_path: Output file path
-        region_bbox: Region bounding box
-    """
     print("\nGenerating visualization...")
 
-    # Reshape to 2D
     n_rows = len(lats)
     n_cols = len(lons)
     pred_grid = predictions.reshape(n_rows, n_cols)
     std_grid = uncertainties.reshape(n_rows, n_cols)
 
-    # Create figure
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
     # Plot mean AGB
@@ -611,15 +443,12 @@ def main():
     print(f"Device: {args.device}")
     print("=" * 80)
 
-    # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate region name for outputs
     min_lon, min_lat, max_lon, max_lat = args.region
     region_name = f"region_{min_lon:.3f}_{min_lat:.3f}_{max_lon:.3f}_{max_lat:.3f}"
 
-    # Step 1: Load model and config
     checkpoint_dir = Path(args.checkpoint)
     model, config = load_model_and_config(checkpoint_dir, args.device)
 
@@ -628,7 +457,6 @@ def main():
     print(f"  Lon: [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}]")
     print(f"  Lat: [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
 
-    # Step 2: Query GEDI context
     context_df = query_context_gedi(
         tuple(args.region),
         args.n_context,
@@ -636,7 +464,6 @@ def main():
         args.gedi_end_time
     )
 
-    # Step 3: Initialize embedding extractor
     print(f"\nInitializing GeoTessera extractor (year={args.embedding_year})...")
     extractor = EmbeddingExtractor(
         year=args.embedding_year,
@@ -644,7 +471,6 @@ def main():
         cache_dir=args.cache_dir
     )
 
-    # Step 4: Extract context embeddings
     context_df = extract_embeddings(
         context_df,
         extractor,
@@ -654,13 +480,11 @@ def main():
     if len(context_df) == 0:
         raise ValueError("No valid context embeddings extracted!")
 
-    # Step 5: Generate prediction grid
     lons, lats, n_rows, n_cols = generate_prediction_grid(
         tuple(args.region),
         args.resolution
     )
 
-    # Create grid of query points
     lon_grid, lat_grid = np.meshgrid(lons, lats)
     query_df = pd.DataFrame({
         'longitude': lon_grid.flatten(),
@@ -669,7 +493,6 @@ def main():
 
     print(f"Total query points: {len(query_df):,}")
 
-    # Step 6: Extract query embeddings
     query_df = extract_embeddings(
         query_df,
         extractor,
@@ -682,7 +505,6 @@ def main():
     print(f"\nWill predict for {len(query_df):,} valid points "
           f"({100*len(query_df)/(n_rows*n_cols):.1f}% of grid)")
 
-    # Step 7: Run inference
     predictions, uncertainties = run_inference(
         model,
         context_df,
@@ -692,16 +514,13 @@ def main():
         args.device
     )
 
-    # Step 8: Reconstruct full grid (fill missing with NaN)
     full_predictions = np.full(n_rows * n_cols, np.nan)
     full_uncertainties = np.full(n_rows * n_cols, np.nan)
 
-    # Map query results back to grid
     query_lons = query_df['longitude'].values
     query_lats = query_df['latitude'].values
 
     for i, (pred, unc) in enumerate(zip(predictions, uncertainties)):
-        # Find grid index
         lon_idx = np.argmin(np.abs(lons - query_lons[i]))
         lat_idx = np.argmin(np.abs(lats - query_lats[i]))
         grid_idx = lat_idx * n_cols + lon_idx
@@ -709,10 +528,8 @@ def main():
         full_predictions[grid_idx] = pred
         full_uncertainties[grid_idx] = unc
 
-    # Step 9: Save outputs
     print("\nSaving outputs...")
 
-    # Save GeoTIFFs
     save_geotiff(
         full_predictions,
         lons, lats,
@@ -727,13 +544,11 @@ def main():
         "AGB Uncertainty (Mg/ha)"
     )
 
-    # Save context points
     save_context_geojson(
         context_df,
         output_dir / f"{region_name}_context.geojson"
     )
 
-    # Step 10: Generate visualization (unless disabled)
     if not args.no_preview:
         create_visualization(
             full_predictions,
@@ -744,7 +559,6 @@ def main():
             tuple(args.region)
         )
 
-    # Save metadata
     metadata = {
         'region_bbox': args.region,
         'resolution_m': args.resolution,

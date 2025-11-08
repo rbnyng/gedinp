@@ -1,7 +1,3 @@
-"""
-Training script for GEDI Neural Process model.
-"""
-
 import argparse
 import json
 from pathlib import Path
@@ -117,7 +113,6 @@ def parse_args():
 
 
 def set_seed(seed):
-    """Set random seeds for reproducibility."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
@@ -125,7 +120,6 @@ def set_seed(seed):
 
 
 def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
-    """Train for one epoch."""
     model.train()
     total_loss = 0
     total_nll = 0
@@ -149,7 +143,6 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
             target_embeddings = batch['target_embeddings'][i].to(device)
             target_agbd = batch['target_agbd'][i].to(device)
 
-            # Skip if no target points
             if len(target_coords) == 0:
                 continue
 
@@ -163,7 +156,6 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
                 training=True
             )
 
-            # Compute loss
             loss, loss_dict = neural_process_loss(
                 pred_mean, pred_log_var, target_agbd,
                 z_mu, z_log_sigma, kl_weight
@@ -183,7 +175,6 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
             batch_loss = batch_loss / n_tiles_in_batch
             batch_loss.backward()
 
-            # Gradient clipping to prevent exploding gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer.step()
@@ -201,7 +192,6 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
 
 
 def validate(model, dataloader, device, kl_weight=1.0):
-    """Validate the model."""
     model.eval()
     total_loss = 0
     total_nll = 0
@@ -227,7 +217,6 @@ def validate(model, dataloader, device, kl_weight=1.0):
                 if len(target_coords) == 0:
                     continue
 
-                # Forward pass
                 pred_mean, pred_log_var, z_mu, z_log_sigma = model(
                     context_coords,
                     context_embeddings,
@@ -237,13 +226,11 @@ def validate(model, dataloader, device, kl_weight=1.0):
                     training=False
                 )
 
-                # Compute loss
                 loss, loss_dict = neural_process_loss(
                     pred_mean, pred_log_var, target_agbd,
                     z_mu, z_log_sigma, kl_weight
                 )
 
-                # Check for NaN/Inf
                 if torch.isnan(loss) or torch.isinf(loss):
                     print(f"Warning: NaN/Inf loss detected in validation!")
                     print(f"  pred_mean range: [{pred_mean.min():.4f}, {pred_mean.max():.4f}]")
@@ -257,7 +244,6 @@ def validate(model, dataloader, device, kl_weight=1.0):
                 batch_kl += loss_dict['kl']
                 n_tiles_in_batch += 1
 
-                # Compute metrics
                 pred_std = torch.exp(0.5 * pred_log_var) if pred_log_var is not None else None
                 metrics = compute_metrics(pred_mean, pred_std, target_agbd)
                 all_metrics.append(metrics)
@@ -273,7 +259,6 @@ def validate(model, dataloader, device, kl_weight=1.0):
     avg_nll = total_nll / max(n_tiles, 1)
     avg_kl = total_kl / max(n_tiles, 1)
 
-    # Aggregate metrics
     avg_metrics = {}
     if len(all_metrics) > 0:
         for key in all_metrics[0].keys():
@@ -286,11 +271,9 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
-    # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save config
     with open(output_dir / 'config.json', 'w') as f:
         json.dump(vars(args), f, indent=2)
 
@@ -302,7 +285,6 @@ def main():
     print(f"Output: {output_dir}")
     print()
 
-    # Step 1: Query GEDI data
     print("Step 1: Querying GEDI data...")
     querier = GEDIQuerier()
     gedi_df = querier.query_region_tiles(
@@ -313,7 +295,6 @@ def main():
     )
     print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
 
-    # Apply temporal filtering if train_years is specified
     if args.train_years is not None:
         print(f"\nApplying temporal filtering: using only years {args.train_years} for training")
 
@@ -332,9 +313,8 @@ def main():
                 print("Warning: Could not find timestamp column for temporal filtering.")
                 print(f"Available columns: {list(gedi_df.columns)}")
                 print("Skipping temporal filtering.")
-                args.train_years = None  # Disable for this run
+                args.train_years = None
 
-        # Filter to specified years
         if args.train_years is not None:
             n_before = len(gedi_df)
             gedi_df = gedi_df[gedi_df['year'].isin(args.train_years)]
@@ -349,7 +329,6 @@ def main():
         print("No GEDI data found in region. Exiting.")
         return
 
-    # Step 2: Extract embeddings
     print("Step 2: Extracting GeoTessera embeddings...")
     extractor = EmbeddingExtractor(
         year=args.embedding_year,
@@ -364,11 +343,9 @@ def main():
     print(f"Retained {len(gedi_df)} shots with valid embeddings")
     print()
 
-    # Save processed data
     with open(output_dir / 'processed_data.pkl', 'wb') as f:
         pickle.dump(gedi_df, f)
 
-    # Step 3: Spatial split
     print("Step 3: Creating spatial train/val/test split...")
     splitter = SpatialTileSplitter(
         gedi_df,
@@ -379,7 +356,6 @@ def main():
     train_df, val_df, test_df = splitter.split()
     print()
 
-    # Save splits
     train_df.to_csv(output_dir / 'train_split.csv', index=False)
     val_df.to_csv(output_dir / 'val_split.csv', index=False)
     test_df.to_csv(output_dir / 'test_split.csv', index=False)
@@ -404,7 +380,6 @@ def main():
     with open(output_dir / 'config.json', 'w') as f:
         json.dump(config, f, indent=2)
 
-    # Step 4: Create datasets
     print("Step 4: Creating datasets...")
     train_dataset = GEDINeuralProcessDataset(
         train_df,
@@ -418,7 +393,7 @@ def main():
         val_df,
         min_shots_per_tile=args.min_shots_per_tile,
         log_transform_agbd=args.log_transform_agbd,
-        augment_coords=False,  # No augmentation for validation
+        augment_coords=False,
         coord_noise_std=0.0,
         global_bounds=global_bounds
     )
@@ -439,7 +414,6 @@ def main():
     )
     print()
 
-    # Step 5: Initialize model
     print("Step 5: Initializing model...")
     print(f"Architecture mode: {args.architecture_mode}")
     model = GEDINeuralProcess(
@@ -460,7 +434,6 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    # Learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='min',
@@ -468,7 +441,6 @@ def main():
         patience=args.lr_scheduler_patience
     )
 
-    # Step 6: Training loop
     print("Step 6: Training...")
     best_val_loss = float('inf')
     best_r2 = float('-inf')
@@ -494,7 +466,6 @@ def main():
         val_losses_dict, val_metrics = validate(model, val_loader, args.device, kl_weight)
         val_losses.append(val_losses_dict['loss'])
 
-        # Print metrics (using scientific notation for losses)
         print(f"Train Loss: {train_metrics['loss']:.6e} (NLL: {train_metrics['nll']:.6e}, KL: {train_metrics['kl']:.6e})")
         print(f"Val Loss:   {val_losses_dict['loss']:.6e} (NLL: {val_losses_dict['nll']:.6e}, KL: {val_losses_dict['kl']:.6e})")
         if val_metrics:
@@ -502,11 +473,9 @@ def main():
             print(f"Val MAE:    {val_metrics.get('mae', 0):.4f}")
             print(f"Val R²:     {val_metrics.get('r2', 0):.4f}")
 
-        # Get current learning rate and KL weight
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Learning Rate: {current_lr:.6e}, KL Weight: {kl_weight:.4f}")
 
-        # Step the learning rate scheduler
         scheduler.step(val_losses_dict['loss'])
 
         # Save best model based on validation loss
@@ -538,13 +507,11 @@ def main():
             }, output_dir / 'best_r2_model.pt')
             print(f"✓ Saved best R² model (R² = {best_r2:.4f})")
 
-        # Early stopping check
         if epochs_without_improvement >= args.early_stopping_patience:
             print(f"\nEarly stopping triggered after {epoch} epochs")
             print(f"No improvement in validation loss for {args.early_stopping_patience} epochs")
             break
 
-        # Save checkpoint
         if epoch % args.save_every == 0:
             torch.save({
                 'epoch': epoch,
@@ -552,7 +519,6 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
             }, output_dir / f'checkpoint_epoch_{epoch}.pt')
 
-    # Save training history
     history = {
         'train_losses': train_losses,
         'val_losses': val_losses
@@ -567,7 +533,6 @@ def main():
     print(f"Models saved to: {output_dir}")
     print("=" * 80)
 
-    # Generate post-training diagnostics
     if args.generate_diagnostics:
         print("\nGenerating post-training diagnostics...")
         try:
