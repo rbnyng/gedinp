@@ -22,7 +22,10 @@ gedinp/
 │   └── spatial_cv.py    # Tile-based spatial cross-validation
 ├── models/
 │   └── neural_process.py # Neural Process architecture
-├── train.py             # Training script
+├── baselines/
+│   └── models.py        # Baseline models (RF, XGBoost, IDW)
+├── train.py             # Neural Process training script
+├── train_baselines.py   # Baseline models training script
 ├── predict.py           # Inference script
 └── requirements.txt
 ```
@@ -138,6 +141,57 @@ model = GEDINeuralProcess(
 ```
 
 See `example_usage.py` for more examples.
+
+### 4. Training Baseline Models
+
+For ablation studies, train baseline models (Random Forest, XGBoost, IDW) to compare with Neural Process:
+
+```bash
+python train_baselines.py \
+    --region_bbox 30.256 -15.853 30.422 -15.625 \
+    --start_time 2019-01-01 \
+    --end_time 2023-12-31 \
+    --embedding_year 2024 \
+    --models rf xgb idw \
+    --output_dir ./outputs_baselines \
+    --cache_dir ./cache
+```
+
+This will:
+- Use the same GEDI data and GeoTessera embeddings as Neural Process
+- Apply identical spatial train/val/test splits for fair comparison
+- Train all three baseline models:
+  - **Random Forest**: Uses coords + flattened embeddings as features
+  - **XGBoost**: Uses coords + flattened embeddings with quantile regression for uncertainty
+  - **IDW (Inverse Distance Weighting)**: Spatial-only baseline (ignores embeddings)
+- Save trained models and evaluation metrics to `./outputs_baselines`
+
+**Baseline Model Options:**
+- `--models`: Which baselines to train (`rf`, `xgb`, `idw`). Default: all three
+- `--rf_n_estimators`: Random Forest trees (default: 100)
+- `--rf_max_depth`: Random Forest max depth (default: None)
+- `--xgb_n_estimators`: XGBoost rounds (default: 100)
+- `--xgb_max_depth`: XGBoost max depth (default: 6)
+- `--xgb_learning_rate`: XGBoost learning rate (default: 0.1)
+- `--idw_power`: IDW distance power (default: 2.0)
+- `--idw_n_neighbors`: IDW neighbors (default: 10)
+
+**Outputs:**
+```
+outputs_baselines/
+├── config.json              # Training configuration
+├── results.json             # Summary of all model metrics
+├── random_forest.pkl        # Trained RF model
+├── xgboost.pkl              # Trained XGBoost model
+├── idw.pkl                  # Trained IDW model
+├── train_split.csv          # Training data split
+├── val_split.csv            # Validation data split
+└── test_split.csv           # Test data split
+```
+
+The baselines provide important ablation context:
+- **RF/XGBoost vs Neural Process**: Tests if meta-learning provides benefits
+- **IDW vs RF/XGBoost**: Shows value-add of satellite embeddings vs spatial-only interpolation
 
 ## Key Features
 
