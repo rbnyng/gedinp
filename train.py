@@ -245,7 +245,7 @@ def validate(model, dataloader, device, kl_weight=1.0):
                 n_tiles_in_batch += 1
 
                 pred_std = torch.exp(0.5 * pred_log_var) if pred_log_var is not None else None
-                metrics = compute_metrics(pred_mean, pred_std, target_agbd)
+                metrics = compute_metrics(pred_mean, target_agbd, pred_std)
                 all_metrics.append(metrics)
 
             if n_tiles_in_batch > 0:
