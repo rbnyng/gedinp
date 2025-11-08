@@ -436,8 +436,8 @@ def main():
     context_df = query_context_gedi(
         tuple(args.region),
         args.n_context,
-        args.gedi_start_time,
-        args.gedi_end_time
+        args.start_time,
+        args.end_time
     )
 
     print(f"\nInitializing GeoTessera extractor (year={args.embedding_year})...")
