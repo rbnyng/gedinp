@@ -8,6 +8,7 @@ import seaborn as sns
 import numpy as np
 from datetime import datetime
 import torch
+from utils.config import load_config
 
 def run_training(base_args, architecture_mode, output_subdir):
     print("=" * 80)
@@ -40,8 +41,7 @@ def run_training(base_args, architecture_mode, output_subdir):
         return None
 
     try:
-        with open(output_subdir / 'config.json', 'r') as f:
-            config = json.load(f)
+        config = load_config(output_subdir / 'config.json')
 
         checkpoint = torch.load(output_subdir / 'best_r2_model.pt',
                                map_location='cpu')
@@ -133,8 +133,7 @@ def compare_results(results, output_dir):
         if res is None:
             continue
         config_path = Path(res['output_dir']) / 'config.json'
-        with open(config_path, 'r') as f:
-            config = json.load(f)
+        config = load_config(config_path)
 
         # Estimate parameters (rough calculation)
         mode = res['architecture']

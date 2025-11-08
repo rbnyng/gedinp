@@ -13,8 +13,9 @@ from tqdm import tqdm
 from scipy.stats import norm, probplot
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from models.neural_process import GEDINeuralProcess
 from utils.normalization import denormalize_agbd, denormalize_std
+from utils.config import load_config
+from utils.model import load_model_from_checkpoint
 
 
 def plot_learning_curves(history_path, output_path):
@@ -463,8 +464,7 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
     print()
 
     # Load config
-    with open(model_dir / 'config.json', 'r') as f:
-        config = json.load(f)
+    config = load_config(model_dir / 'config.json')
 
     # 1. Learning curves
     print("[1/4] Generating learning curves...")
@@ -520,20 +520,9 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
             )
 
             # Load model
-            model = GEDINeuralProcess(
-                patch_size=config.get('patch_size', 3),
-                embedding_channels=128,
-                embedding_feature_dim=config.get('embedding_feature_dim', 128),
-                context_repr_dim=config.get('context_repr_dim', 128),
-                hidden_dim=config.get('hidden_dim', 512),
-                latent_dim=config.get('latent_dim', 128),
-                output_uncertainty=True,
-                architecture_mode=config.get('architecture_mode', 'deterministic'),
-                num_attention_heads=config.get('num_attention_heads', 4)
-            ).to(device)
-
-            checkpoint = torch.load(model_dir / 'best_r2_model.pt', map_location=device, weights_only=False)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            model, checkpoint, checkpoint_path = load_model_from_checkpoint(
+                model_dir, device
+            )
         else:
             print("  ⚠ processed_data.pkl not found, cannot load validation data")
     else:

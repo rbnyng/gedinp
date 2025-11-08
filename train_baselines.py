@@ -14,6 +14,7 @@ from data.spatial_cv import SpatialTileSplitter
 from baselines import RandomForestBaseline, XGBoostBaseline, IDWBaseline
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
 from utils.evaluation import compute_metrics
+from utils.config import save_config
 
 
 def parse_args():
@@ -178,8 +179,7 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(output_dir / 'config.json', 'w') as f:
-        json.dump(vars(args), f, indent=2)
+    save_config(vars(args), output_dir / 'config.json')
 
     print("=" * 80)
     print("GEDI Baseline Models Training")
@@ -246,8 +246,7 @@ def main():
 
     config = vars(args)
     config['global_bounds'] = list(global_bounds)
-    with open(output_dir / 'config.json', 'w') as f:
-        json.dump(config, f, indent=2)
+    save_config(config, output_dir / 'config.json')
 
     print("Step 4: Preparing data for baseline models...")
     agbd_scale = 200.0

@@ -14,26 +14,9 @@ import seaborn as sns
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from models.neural_process import GEDINeuralProcess
 from utils.evaluation import evaluate_model, plot_results, compute_metrics
-
-def convert_to_serializable(obj):
-    if isinstance(obj, dict):
-        return {key: convert_to_serializable(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_serializable(item) for item in obj]
-    elif isinstance(obj, tuple):
-        return tuple(convert_to_serializable(item) for item in obj)
-    elif isinstance(obj, (np.integer, np.int32, np.int64)):
-        return int(obj)
-    elif isinstance(obj, (np.floating, np.float32, np.float64)):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, np.bool_):
-        return bool(obj)
-    else:
-        return obj
+from utils.config import load_config, save_config, get_global_bounds
+from utils.model import load_model_from_checkpoint
 
 
 def main():
@@ -71,8 +54,7 @@ def main():
     print("TEMPORAL VALIDATION - GEDI NEURAL PROCESS")
     print("=" * 80)
 
-    with open(model_dir / 'config.json', 'r') as f:
-        config = json.load(f)
+    config = load_config(model_dir / 'config.json')
 
     print(f"Model directory: {model_dir}")
     print(f"Checkpoint: {args.checkpoint}")
@@ -152,7 +134,7 @@ def main():
     print("Step 3: Creating evaluation dataset...")
     print("=" * 80)
 
-    global_bounds = tuple(config['global_bounds'])
+    global_bounds = get_global_bounds(config)
     print(f"Using global bounds from training: {global_bounds}")
 
     eval_dataset = GEDINeuralProcessDataset(
@@ -176,23 +158,9 @@ def main():
     print("Step 4: Loading trained model...")
     print("=" * 80)
 
-    model = GEDINeuralProcess(
-        patch_size=config.get('patch_size', 3),
-        embedding_channels=128,
-        embedding_feature_dim=config.get('embedding_feature_dim', 128),
-        context_repr_dim=config.get('context_repr_dim', 128),
-        hidden_dim=config.get('hidden_dim', 512),
-        latent_dim=config.get('latent_dim', 128),
-        output_uncertainty=True,
-        architecture_mode=config.get('architecture_mode', 'deterministic'),
-        num_attention_heads=config.get('num_attention_heads', 4)
-    ).to(args.device)
-
-    # Load checkpoint
-    checkpoint_path = model_dir / args.checkpoint
-    print(f"Loading checkpoint from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=args.device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model, checkpoint, checkpoint_path = load_model_from_checkpoint(
+        model_dir, args.device, args.checkpoint
+    )
 
     print(f"Checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
     if 'val_metrics' in checkpoint:
@@ -228,8 +196,7 @@ def main():
     }
 
     results_path = model_dir / f'temporal_results_{output_suffix}.json'
-    with open(results_path, 'w') as f:
-        json.dump(convert_to_serializable(results), f, indent=2)
+    save_config(results, results_path)
     print(f"Saved metrics to: {results_path}")
 
     results_df = pd.DataFrame({

@@ -16,8 +16,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from models.neural_process import GEDINeuralProcess
 from utils.evaluation import evaluate_model, plot_results, compute_metrics
+from utils.config import load_config, get_global_bounds
+from utils.model import load_model_from_checkpoint
 
 
 def main():
@@ -38,8 +39,7 @@ def main():
     model_dir = Path(args.model_dir)
 
     # Load config
-    with open(model_dir / 'config.json', 'r') as f:
-        config = json.load(f)
+    config = load_config(model_dir / 'config.json')
 
     print("=" * 80)
     print("EVALUATING GEDI NEURAL PROCESS")
@@ -91,7 +91,7 @@ def main():
     print(f"Test set: {len(test_df)} shots across {test_df['tile_id'].nunique()} tiles")
 
     # Create dataset
-    global_bounds = tuple(config['global_bounds'])
+    global_bounds = get_global_bounds(config)
     test_dataset = GEDINeuralProcessDataset(
         test_df,
         min_shots_per_tile=config.get('min_shots_per_tile', 10),
@@ -109,25 +109,11 @@ def main():
         num_workers=args.num_workers
     )
 
-    # Initialize model
+    # Initialize and load model
     print("Initializing model...")
-    model = GEDINeuralProcess(
-        patch_size=config.get('patch_size', 3),
-        embedding_channels=128,
-        embedding_feature_dim=config.get('embedding_feature_dim', 128),
-        context_repr_dim=config.get('context_repr_dim', 128),
-        hidden_dim=config.get('hidden_dim', 512),
-        latent_dim=config.get('latent_dim', 128),
-        output_uncertainty=True,
-        architecture_mode=config.get('architecture_mode', 'deterministic'),
-        num_attention_heads=config.get('num_attention_heads', 4)
-    ).to(args.device)
-
-    # Load checkpoint
-    checkpoint_path = model_dir / args.checkpoint
-    print(f"Loading checkpoint from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=args.device,weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model, checkpoint, checkpoint_path = load_model_from_checkpoint(
+        model_dir, args.device, args.checkpoint
+    )
 
     print(f"Checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
     if 'val_metrics' in checkpoint:
