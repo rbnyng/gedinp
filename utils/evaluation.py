@@ -106,24 +106,66 @@ def evaluate_model(
                 if len(target_coords) == 0:
                     continue
 
-                # Forward pass
-                pred_mean, pred_log_var, _, _ = model(
-                    context_coords,
-                    context_embeddings,
-                    context_agbd,
-                    target_coords,
-                    target_embeddings,
-                    training=False
-                )
+                # Chunk large tiles to avoid OOM
+                max_targets_per_chunk = 5000
+                n_targets = len(target_coords)
 
-                # Convert to numpy
-                pred_mean_np = pred_mean.detach().cpu().numpy().flatten()
-                target_np = target_agbd.detach().cpu().numpy().flatten()
+                if n_targets > max_targets_per_chunk:
+                    # Process in chunks
+                    tile_predictions = []
+                    tile_targets = []
+                    tile_uncertainties = []
 
-                if pred_log_var is not None:
-                    pred_std_np = torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
+                    for chunk_start in range(0, n_targets, max_targets_per_chunk):
+                        chunk_end = min(chunk_start + max_targets_per_chunk, n_targets)
+
+                        chunk_target_coords = target_coords[chunk_start:chunk_end]
+                        chunk_target_embeddings = target_embeddings[chunk_start:chunk_end]
+                        chunk_target_agbd = target_agbd[chunk_start:chunk_end]
+
+                        # Forward pass on chunk
+                        pred_mean, pred_log_var, _, _ = model(
+                            context_coords,
+                            context_embeddings,
+                            context_agbd,
+                            chunk_target_coords,
+                            chunk_target_embeddings,
+                            training=False
+                        )
+
+                        tile_predictions.append(pred_mean.detach().cpu().numpy().flatten())
+                        tile_targets.append(chunk_target_agbd.detach().cpu().numpy().flatten())
+
+                        if pred_log_var is not None:
+                            tile_uncertainties.append(
+                                torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
+                            )
+                        else:
+                            tile_uncertainties.append(np.zeros_like(pred_mean.detach().cpu().numpy().flatten()))
+
+                    # Concatenate chunks
+                    pred_mean_np = np.concatenate(tile_predictions)
+                    target_np = np.concatenate(tile_targets)
+                    pred_std_np = np.concatenate(tile_uncertainties)
                 else:
-                    pred_std_np = np.zeros_like(pred_mean_np)
+                    # Process entire tile at once
+                    pred_mean, pred_log_var, _, _ = model(
+                        context_coords,
+                        context_embeddings,
+                        context_agbd,
+                        target_coords,
+                        target_embeddings,
+                        training=False
+                    )
+
+                    # Convert to numpy
+                    pred_mean_np = pred_mean.detach().cpu().numpy().flatten()
+                    target_np = target_agbd.detach().cpu().numpy().flatten()
+
+                    if pred_log_var is not None:
+                        pred_std_np = torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
+                    else:
+                        pred_std_np = np.zeros_like(pred_mean_np)
 
                 # Store predictions
                 all_predictions.extend(pred_mean_np)
@@ -131,8 +173,7 @@ def evaluate_model(
                 all_uncertainties.extend(pred_std_np)
 
                 # Compute metrics for this tile
-                pred_std = torch.exp(0.5 * pred_log_var) if pred_log_var is not None else None
-                metrics = compute_metrics(pred_mean, target_agbd, pred_std)
+                metrics = compute_metrics(pred_mean_np, target_np, pred_std_np)
                 all_metrics.append(metrics)
 
     # Convert to arrays
