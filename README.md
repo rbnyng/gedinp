@@ -193,6 +193,42 @@ The baselines provide important ablation context:
 - **RF/XGBoost vs Neural Process**: Tests if meta-learning provides benefits
 - **IDW vs RF/XGBoost**: Shows value-add of satellite embeddings vs spatial-only interpolation
 
+### 5. Temporal Validation
+
+Test whether your model generalizes to future years not seen during training:
+
+```bash
+# Step 1: Train on historical years (2019-2021)
+python train.py \
+    --region_bbox 30.256 -15.853 30.422 -15.625 \
+    --train_years 2019 2020 2021 \
+    --epochs 100 \
+    --output_dir ./outputs_temporal
+
+# Step 2: Evaluate on future years (2022-2023)
+python evaluate_temporal.py \
+    --model_dir ./outputs_temporal \
+    --test_years 2022 2023 \
+    --checkpoint best_r2_model.pt
+
+# Step 3: Compare spatial vs temporal performance
+python compare_spatial_temporal.py \
+    --model_dir ./outputs_temporal \
+    --temporal_suffix years_2022_2023
+```
+
+This workflow:
+- **Training**: Uses only 2019-2021 GEDI data (with spatial CV)
+- **Temporal test**: Evaluates on completely held-out years (2022-2023)
+- **Comparison**: Generates side-by-side spatial vs temporal performance plots
+
+**Why temporal validation matters:**
+- Tests real-world deployment scenario (train on past, predict future)
+- Assesses robustness to temporal distribution shift
+- Often required by reviewers for publication
+
+See [`docs/TEMPORAL_VALIDATION.md`](docs/TEMPORAL_VALIDATION.md) for detailed guide and best practices.
+
 ## Key Features
 
 - **Spatial Cross-Validation**: Tile-based splits ensure no data leakage
