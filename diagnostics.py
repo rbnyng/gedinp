@@ -14,39 +14,7 @@ from scipy.stats import norm, probplot
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
 from models.neural_process import GEDINeuralProcess
-
-
-def denormalize_agbd(agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    return np.expm1(agbd_norm * np.log1p(agbd_scale))
-
-
-def denormalize_std(std_norm: np.ndarray, agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    """
-    Convert normalized standard deviation to raw values (Mg/ha).
-
-    Uses the derivative of the log transform at the predicted mean:
-    d/dx[log(1+x)] = 1/(1+x)
-
-    For log-normal distributions, the standard deviation transforms as:
-    std_raw ≈ std_norm * log(1+scale) * (1 + mean_raw)
-
-    Args:
-        std_norm: Normalized standard deviation
-        agbd_norm: Normalized AGBD mean values (for proper scaling)
-        agbd_scale: Scale factor (default: 200.0)
-
-    Returns:
-        Raw standard deviation in Mg/ha
-    """
-    # Denormalize the mean first to get the scale factor
-    mean_raw = denormalize_agbd(agbd_norm, agbd_scale)
-
-    # Transform std using derivative of log at the mean
-    # For log(1+x), derivative is 1/(1+x), but we're in normalized space
-    # so we need to scale by log(1+scale) and multiply by (1+mean_raw)
-    std_raw = std_norm * np.log1p(agbd_scale) * (1 + mean_raw)
-
-    return std_raw
+from utils.normalization import denormalize_agbd, denormalize_std
 
 
 def plot_learning_curves(history_path, output_path):

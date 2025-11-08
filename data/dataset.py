@@ -9,6 +9,8 @@ import pandas as pd
 from typing import Optional, Dict, Tuple
 import random
 
+from utils.normalization import normalize_coords
+
 
 class GEDINeuralProcessDataset(Dataset):
     """
@@ -106,14 +108,8 @@ class GEDINeuralProcessDataset(Dataset):
             Normalized coordinates (N, 2)
         """
         # Use global bounds for normalization
-        lon_range = self.lon_max - self.lon_min if self.lon_max > self.lon_min else 1.0
-        lat_range = self.lat_max - self.lat_min if self.lat_max > self.lat_min else 1.0
-
-        normalized = coords.copy()
-        normalized[:, 0] = (coords[:, 0] - self.lon_min) / lon_range
-        normalized[:, 1] = (coords[:, 1] - self.lat_min) / lat_range
-
-        return normalized
+        global_bounds = (self.lon_min, self.lat_min, self.lon_max, self.lat_max)
+        return normalize_coords(coords, global_bounds)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         """
