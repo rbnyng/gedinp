@@ -150,9 +150,9 @@ def main():
         print(f"{key.upper()}: {val:.4f}")
     print("=" * 80)
 
-    # Save results
+    # Save results (convert numpy types to Python native types for JSON)
     results = {
-        'metrics': metrics,
+        'metrics': {k: float(v) for k, v in metrics.items()},
         'config': config,
         'checkpoint': args.checkpoint
     }
