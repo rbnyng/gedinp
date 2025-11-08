@@ -49,15 +49,15 @@ def parse_args():
                         help='Hidden layer dimension')
     parser.add_argument('--embedding_feature_dim', type=int, default=128,
                         help='Embedding feature dimension')
-    parser.add_argument('--context_repr_dim', type=int, default=128,
+    parser.add_argument('--context_repr_dim', type=int, default=256,
                         help='Context representation dimension')
-    parser.add_argument('--latent_dim', type=int, default=128,
+    parser.add_argument('--latent_dim', type=int, default=256,
                         help='Latent variable dimension')
     parser.add_argument('--architecture_mode', type=str, default='anp',
                         choices=['deterministic', 'latent', 'anp', 'cnp'],
                         help='Architecture mode: deterministic (attention only), '
                              'latent (stochastic only), anp (both), cnp (baseline)')
-    parser.add_argument('--num_attention_heads', type=int, default=4,
+    parser.add_argument('--num_attention_heads', type=int, default=16,
                         help='Number of attention heads')
 
     # Training arguments
