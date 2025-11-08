@@ -53,9 +53,9 @@ def parse_args():
                         help='Disable preview generation')
     parser.add_argument('--cache_dir', type=str, default='./cache',
                         help='Cache directory for embeddings')
-    parser.add_argument('--gedi_start_time', type=str, default='2022-01-01',
+    parser.add_argument('--start_time', type=str, default='2022-01-01',
                         help='GEDI query start date (YYYY-MM-DD)')
-    parser.add_argument('--gedi_end_time', type=str, default='2022-12-31',
+    parser.add_argument('--end_time', type=str, default='2022-12-31',
                         help='GEDI query end date (YYYY-MM-DD)')
     parser.add_argument('--embedding_year', type=int, default=2022,
                         help='GeoTessera embedding year (default: 2022)')
