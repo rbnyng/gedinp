@@ -1,10 +1,3 @@
-"""
-Evaluate a trained GEDI Neural Process model on temporal holdout data.
-
-This script tests temporal generalization by evaluating on GEDI data from
-years not seen during training (e.g., train on 2019-2021, test on 2022-2023).
-"""
-
 import argparse
 import json
 from pathlib import Path
@@ -23,7 +16,24 @@ from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
 from models.neural_process import GEDINeuralProcess, compute_metrics
 
-
+def convert_to_serializable(obj):
+    if isinstance(obj, dict):
+        return {key: convert_to_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_to_serializable(item) for item in obj)
+    elif isinstance(obj, (np.integer, np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    else:
+        return obj
+        
 def evaluate_model(model, dataloader, device):
     """Evaluate model on a dataset."""
     model.eval()
@@ -342,7 +352,7 @@ def main():
     # Load checkpoint
     checkpoint_path = model_dir / args.checkpoint
     print(f"Loading checkpoint from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=args.device)
+    checkpoint = torch.load(checkpoint_path, map_location=args.device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
 
     print(f"Checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
@@ -384,7 +394,7 @@ def main():
 
     results_path = model_dir / f'temporal_results_{output_suffix}.json'
     with open(results_path, 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(convert_to_serializable(results), f, indent=2)
     print(f"Saved metrics to: {results_path}")
 
     # Save predictions
