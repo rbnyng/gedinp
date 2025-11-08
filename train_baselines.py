@@ -1,0 +1,533 @@
+"""
+Training script for baseline models (Random Forest, XGBoost, IDW).
+
+This script reuses the data loading infrastructure from train.py to ensure
+fair comparison with the Neural Process model.
+"""
+
+import argparse
+import json
+from pathlib import Path
+import pickle
+from time import time
+
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+from data.gedi import GEDIQuerier
+from data.embeddings import EmbeddingExtractor
+from data.spatial_cv import SpatialTileSplitter
+from baselines import RandomForestBaseline, XGBoostBaseline, IDWBaseline
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train baseline models for GEDI AGBD prediction')
+
+    # Data arguments
+    parser.add_argument('--region_bbox', type=float, nargs=4, required=True,
+                        help='Region bounding box: min_lon min_lat max_lon max_lat')
+    parser.add_argument('--start_time', type=str, default='2019-01-01',
+                        help='Start date for GEDI data (YYYY-MM-DD)')
+    parser.add_argument('--end_time', type=str, default='2023-12-31',
+                        help='End date for GEDI data (YYYY-MM-DD)')
+    parser.add_argument('--embedding_year', type=int, default=2024,
+                        help='Year of GeoTessera embeddings')
+    parser.add_argument('--cache_dir', type=str, default='./cache',
+                        help='Directory for caching tiles and embeddings')
+
+    # Model arguments
+    parser.add_argument('--patch_size', type=int, default=3,
+                        help='Embedding patch size (default: 3x3)')
+
+    # Random Forest arguments
+    parser.add_argument('--rf_n_estimators', type=int, default=100,
+                        help='Random Forest: number of trees')
+    parser.add_argument('--rf_max_depth', type=int, default=None,
+                        help='Random Forest: maximum tree depth (None=unlimited)')
+
+    # XGBoost arguments
+    parser.add_argument('--xgb_n_estimators', type=int, default=100,
+                        help='XGBoost: number of boosting rounds')
+    parser.add_argument('--xgb_max_depth', type=int, default=6,
+                        help='XGBoost: maximum tree depth')
+    parser.add_argument('--xgb_learning_rate', type=float, default=0.1,
+                        help='XGBoost: learning rate')
+
+    # IDW arguments
+    parser.add_argument('--idw_power', type=float, default=2.0,
+                        help='IDW: power parameter for distance weighting')
+    parser.add_argument('--idw_n_neighbors', type=int, default=10,
+                        help='IDW: number of nearest neighbors')
+
+    # Training arguments
+    parser.add_argument('--val_ratio', type=float, default=0.15,
+                        help='Validation set ratio')
+    parser.add_argument('--test_ratio', type=float, default=0.15,
+                        help='Test set ratio')
+    parser.add_argument('--log_transform_agbd', action='store_true', default=True,
+                        help='Apply log transform to AGBD')
+
+    # Output arguments
+    parser.add_argument('--output_dir', type=str, default='./outputs_baselines',
+                        help='Output directory for models and logs')
+
+    # Other
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed')
+    parser.add_argument('--models', type=str, nargs='+', default=['rf', 'xgb', 'idw'],
+                        choices=['rf', 'xgb', 'idw'],
+                        help='Which models to train (default: all)')
+
+    return parser.parse_args()
+
+
+def prepare_data(df, log_transform=True, agbd_scale=200.0):
+    """
+    Prepare data for baseline models.
+
+    Args:
+        df: DataFrame with columns: latitude, longitude, agbd, embedding_patch
+        log_transform: Apply log transform to AGBD
+        agbd_scale: Scale factor for AGBD normalization
+
+    Returns:
+        coords: (N, 2) normalized coordinates
+        embeddings: (N, H, W, C) embedding patches
+        agbd: (N,) normalized AGBD values
+    """
+    # Extract coordinates
+    coords = df[['longitude', 'latitude']].values
+
+    # Extract embeddings
+    embeddings = np.stack(df['embedding_patch'].values)
+
+    # Extract AGBD
+    agbd = df['agbd'].values
+
+    # Apply log transform and normalize
+    if log_transform:
+        agbd = np.log1p(agbd) / np.log1p(agbd_scale)
+    else:
+        agbd = agbd / agbd_scale
+
+    return coords, embeddings, agbd
+
+
+def normalize_coordinates(coords, bounds):
+    """
+    Normalize coordinates to [0, 1] using global bounds.
+
+    Args:
+        coords: (N, 2) array of [lon, lat]
+        bounds: (lon_min, lat_min, lon_max, lat_max)
+
+    Returns:
+        Normalized coordinates
+    """
+    lon_min, lat_min, lon_max, lat_max = bounds
+    lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
+    lat_range = lat_max - lat_min if lat_max > lat_min else 1.0
+
+    normalized = coords.copy()
+    normalized[:, 0] = (coords[:, 0] - lon_min) / lon_range
+    normalized[:, 1] = (coords[:, 1] - lat_min) / lat_range
+
+    return normalized
+
+
+def denormalize_agbd(agbd_norm, log_transform=True, agbd_scale=200.0):
+    """
+    Denormalize AGBD values back to Mg/ha.
+
+    Args:
+        agbd_norm: Normalized AGBD values
+        log_transform: Whether log transform was applied
+        agbd_scale: Scale factor used for normalization
+
+    Returns:
+        AGBD in Mg/ha
+    """
+    if log_transform:
+        return np.expm1(agbd_norm * np.log1p(agbd_scale))
+    else:
+        return agbd_norm * agbd_scale
+
+
+def compute_metrics(pred, true):
+    """
+    Compute regression metrics.
+
+    Args:
+        pred: Predicted values
+        true: True values
+
+    Returns:
+        Dict of metrics (RMSE, MAE, R²)
+    """
+    # RMSE
+    rmse = np.sqrt(np.mean((pred - true) ** 2))
+
+    # MAE
+    mae = np.mean(np.abs(pred - true))
+
+    # R²
+    ss_res = np.sum((true - pred) ** 2)
+    ss_tot = np.sum((true - np.mean(true)) ** 2)
+    r2 = 1 - (ss_res / (ss_tot + 1e-8))
+
+    return {'rmse': rmse, 'mae': mae, 'r2': r2}
+
+
+def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_transform=True):
+    """
+    Evaluate a baseline model.
+
+    Args:
+        model: Trained baseline model
+        coords: (N, 2) query coordinates
+        embeddings: (N, H, W, C) query embeddings
+        agbd_true: (N,) true AGBD values (denormalized, in Mg/ha)
+        agbd_scale: AGBD scale factor
+        log_transform: Whether log transform was used
+
+    Returns:
+        Dict of metrics
+    """
+    # Predict (normalized)
+    pred_norm, pred_std_norm = model.predict(coords, embeddings, return_std=True)
+
+    # Denormalize predictions
+    pred = denormalize_agbd(pred_norm, log_transform, agbd_scale)
+
+    # Compute metrics
+    metrics = compute_metrics(pred, agbd_true)
+
+    return metrics, pred, pred_std_norm
+
+
+def train_random_forest(train_coords, train_embeddings, train_agbd, args):
+    """Train Random Forest baseline."""
+    print("\n" + "=" * 80)
+    print("Training Random Forest Baseline")
+    print("=" * 80)
+
+    model = RandomForestBaseline(
+        n_estimators=args.rf_n_estimators,
+        max_depth=args.rf_max_depth,
+        random_state=args.seed
+    )
+
+    print(f"n_estimators: {args.rf_n_estimators}")
+    print(f"max_depth: {args.rf_max_depth}")
+
+    start_time = time()
+    model.fit(train_coords, train_embeddings, train_agbd)
+    train_time = time() - start_time
+
+    print(f"Training completed in {train_time:.2f} seconds")
+
+    return model, train_time
+
+
+def train_xgboost(train_coords, train_embeddings, train_agbd, args):
+    """Train XGBoost baseline."""
+    print("\n" + "=" * 80)
+    print("Training XGBoost Baseline")
+    print("=" * 80)
+
+    model = XGBoostBaseline(
+        n_estimators=args.xgb_n_estimators,
+        max_depth=args.xgb_max_depth,
+        learning_rate=args.xgb_learning_rate,
+        random_state=args.seed
+    )
+
+    print(f"n_estimators: {args.xgb_n_estimators}")
+    print(f"max_depth: {args.xgb_max_depth}")
+    print(f"learning_rate: {args.xgb_learning_rate}")
+
+    start_time = time()
+    model.fit(train_coords, train_embeddings, train_agbd, fit_quantiles=True)
+    train_time = time() - start_time
+
+    print(f"Training completed in {train_time:.2f} seconds")
+
+    return model, train_time
+
+
+def train_idw(train_coords, train_embeddings, train_agbd, args):
+    """Train IDW baseline."""
+    print("\n" + "=" * 80)
+    print("Training IDW Baseline (Spatial Only)")
+    print("=" * 80)
+
+    model = IDWBaseline(
+        power=args.idw_power,
+        n_neighbors=args.idw_n_neighbors
+    )
+
+    print(f"power: {args.idw_power}")
+    print(f"n_neighbors: {args.idw_n_neighbors}")
+    print("Note: IDW ignores embeddings and uses only spatial coordinates")
+
+    start_time = time()
+    model.fit(train_coords, train_embeddings, train_agbd)
+    train_time = time() - start_time
+
+    print(f"Training completed in {train_time:.2f} seconds")
+
+    return model, train_time
+
+
+def main():
+    args = parse_args()
+    np.random.seed(args.seed)
+
+    # Create output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save config
+    with open(output_dir / 'config.json', 'w') as f:
+        json.dump(vars(args), f, indent=2)
+
+    print("=" * 80)
+    print("GEDI Baseline Models Training")
+    print("=" * 80)
+    print(f"Models to train: {', '.join(args.models)}")
+    print(f"Region: {args.region_bbox}")
+    print(f"Output: {output_dir}")
+    print()
+
+    # Step 1: Query GEDI data
+    print("Step 1: Querying GEDI data...")
+    querier = GEDIQuerier()
+    gedi_df = querier.query_region_tiles(
+        region_bbox=args.region_bbox,
+        tile_size=0.1,
+        start_time=args.start_time,
+        end_time=args.end_time
+    )
+    print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
+    print()
+
+    if len(gedi_df) == 0:
+        print("No GEDI data found in region. Exiting.")
+        return
+
+    # Step 2: Extract embeddings
+    print("Step 2: Extracting GeoTessera embeddings...")
+    extractor = EmbeddingExtractor(
+        year=args.embedding_year,
+        patch_size=args.patch_size,
+        cache_dir=args.cache_dir
+    )
+    gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
+    print()
+
+    # Filter out shots without embeddings
+    gedi_df = gedi_df[gedi_df['embedding_patch'].notna()]
+    print(f"Retained {len(gedi_df)} shots with valid embeddings")
+    print()
+
+    # Save processed data
+    with open(output_dir / 'processed_data.pkl', 'wb') as f:
+        pickle.dump(gedi_df, f)
+
+    # Step 3: Spatial split
+    print("Step 3: Creating spatial train/val/test split...")
+    splitter = SpatialTileSplitter(
+        gedi_df,
+        val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
+        random_state=args.seed
+    )
+    train_df, val_df, test_df = splitter.split()
+    print()
+
+    # Save splits
+    train_df.to_csv(output_dir / 'train_split.csv', index=False)
+    val_df.to_csv(output_dir / 'val_split.csv', index=False)
+    test_df.to_csv(output_dir / 'test_split.csv', index=False)
+
+    # Compute global coordinate bounds from training data
+    global_bounds = (
+        train_df['longitude'].min(),
+        train_df['latitude'].min(),
+        train_df['longitude'].max(),
+        train_df['latitude'].max()
+    )
+    print(f"Global bounds: lon [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}], "
+          f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
+    print()
+
+    # Save global bounds to config
+    config = vars(args)
+    config['global_bounds'] = list(global_bounds)
+    with open(output_dir / 'config.json', 'w') as f:
+        json.dump(config, f, indent=2)
+
+    # Step 4: Prepare data
+    print("Step 4: Preparing data for baseline models...")
+    agbd_scale = 200.0
+
+    train_coords, train_embeddings, train_agbd_norm = prepare_data(
+        train_df, log_transform=args.log_transform_agbd, agbd_scale=agbd_scale
+    )
+    val_coords, val_embeddings, val_agbd_norm = prepare_data(
+        val_df, log_transform=args.log_transform_agbd, agbd_scale=agbd_scale
+    )
+    test_coords, test_embeddings, test_agbd_norm = prepare_data(
+        test_df, log_transform=args.log_transform_agbd, agbd_scale=agbd_scale
+    )
+
+    # Normalize coordinates
+    train_coords = normalize_coordinates(train_coords, global_bounds)
+    val_coords = normalize_coordinates(val_coords, global_bounds)
+    test_coords = normalize_coordinates(test_coords, global_bounds)
+
+    # Keep original AGBD for evaluation
+    train_agbd = train_df['agbd'].values
+    val_agbd = val_df['agbd'].values
+    test_agbd = test_df['agbd'].values
+
+    print(f"Training set: {len(train_coords)} shots")
+    print(f"Validation set: {len(val_coords)} shots")
+    print(f"Test set: {len(test_coords)} shots")
+    print(f"Feature dimensions: coords={train_coords.shape[1]}, embeddings={train_embeddings.shape[1:]}")
+    print()
+
+    # Step 5: Train models
+    results = {}
+
+    if 'rf' in args.models:
+        model_rf, train_time = train_random_forest(
+            train_coords, train_embeddings, train_agbd_norm, args
+        )
+
+        # Evaluate
+        print("Evaluating on validation set...")
+        val_metrics, val_pred, _ = evaluate_model(
+            model_rf, val_coords, val_embeddings, val_agbd, agbd_scale, args.log_transform_agbd
+        )
+        print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
+
+        print("Evaluating on test set...")
+        test_metrics, test_pred, _ = evaluate_model(
+            model_rf, test_coords, test_embeddings, test_agbd, agbd_scale, args.log_transform_agbd
+        )
+        print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
+
+        results['random_forest'] = {
+            'train_time': train_time,
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics
+        }
+
+        # Save model
+        with open(output_dir / 'random_forest.pkl', 'wb') as f:
+            pickle.dump(model_rf, f)
+
+    if 'xgb' in args.models:
+        model_xgb, train_time = train_xgboost(
+            train_coords, train_embeddings, train_agbd_norm, args
+        )
+
+        # Evaluate
+        print("Evaluating on validation set...")
+        val_metrics, val_pred, _ = evaluate_model(
+            model_xgb, val_coords, val_embeddings, val_agbd, agbd_scale, args.log_transform_agbd
+        )
+        print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
+
+        print("Evaluating on test set...")
+        test_metrics, test_pred, _ = evaluate_model(
+            model_xgb, test_coords, test_embeddings, test_agbd, agbd_scale, args.log_transform_agbd
+        )
+        print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
+
+        results['xgboost'] = {
+            'train_time': train_time,
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics
+        }
+
+        # Save model
+        with open(output_dir / 'xgboost.pkl', 'wb') as f:
+            pickle.dump(model_xgb, f)
+
+    if 'idw' in args.models:
+        model_idw, train_time = train_idw(
+            train_coords, train_embeddings, train_agbd_norm, args
+        )
+
+        # Evaluate
+        print("Evaluating on validation set...")
+        val_metrics, val_pred, _ = evaluate_model(
+            model_idw, val_coords, val_embeddings, val_agbd, agbd_scale, args.log_transform_agbd
+        )
+        print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
+
+        print("Evaluating on test set...")
+        test_metrics, test_pred, _ = evaluate_model(
+            model_idw, test_coords, test_embeddings, test_agbd, agbd_scale, args.log_transform_agbd
+        )
+        print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
+
+        results['idw'] = {
+            'train_time': train_time,
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics
+        }
+
+        # Save model
+        with open(output_dir / 'idw.pkl', 'wb') as f:
+            pickle.dump(model_idw, f)
+
+    # Step 6: Save summary results
+    print("\n" + "=" * 80)
+    print("SUMMARY OF RESULTS")
+    print("=" * 80)
+
+    summary_table = []
+    for model_name, model_results in results.items():
+        row = {
+            'Model': model_name.upper(),
+            'Train Time (s)': f"{model_results['train_time']:.2f}",
+            'Val RMSE': f"{model_results['val_metrics']['rmse']:.2f}",
+            'Val MAE': f"{model_results['val_metrics']['mae']:.2f}",
+            'Val R²': f"{model_results['val_metrics']['r2']:.4f}",
+            'Test RMSE': f"{model_results['test_metrics']['rmse']:.2f}",
+            'Test MAE': f"{model_results['test_metrics']['mae']:.2f}",
+            'Test R²': f"{model_results['test_metrics']['r2']:.4f}",
+        }
+        summary_table.append(row)
+
+    # Print as table
+    if summary_table:
+        df_summary = pd.DataFrame(summary_table)
+        print(df_summary.to_string(index=False))
+
+    print("=" * 80)
+
+    # Save results
+    with open(output_dir / 'results.json', 'w') as f:
+        json.dump(results, f, indent=2)
+
+    print(f"\nResults saved to: {output_dir}")
+    print("Files:")
+    print("  - config.json")
+    print("  - results.json")
+    for model in args.models:
+        if model == 'rf':
+            print("  - random_forest.pkl")
+        elif model == 'xgb':
+            print("  - xgboost.pkl")
+        elif model == 'idw':
+            print("  - idw.pkl")
+    print("=" * 80)
+
+
+if __name__ == '__main__':
+    main()
