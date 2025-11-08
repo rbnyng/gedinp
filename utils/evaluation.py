@@ -74,15 +74,19 @@ def compute_metrics(
 def evaluate_model(
     model: torch.nn.Module,
     dataloader: DataLoader,
-    device: torch.device
+    device: torch.device,
+    max_context_shots: int = 20000,
+    max_targets_per_chunk: int = 1000
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
     """
-    Evaluate model on a dataset.
+    Evaluate model on a dataset with memory-efficient chunking.
 
     Args:
         model: The model to evaluate
         dataloader: DataLoader for the dataset
         device: Device to run evaluation on
+        max_context_shots: Maximum context shots to use (subsample if exceeded)
+        max_targets_per_chunk: Maximum targets to process at once
 
     Returns:
         Tuple of (predictions, targets, uncertainties, avg_metrics)
@@ -94,7 +98,7 @@ def evaluate_model(
     all_metrics = []
 
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc='Evaluating'):
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc='Evaluating')):
             for i in range(len(batch['context_coords'])):
                 context_coords = batch['context_coords'][i].to(device)
                 context_embeddings = batch['context_embeddings'][i].to(device)
@@ -106,66 +110,59 @@ def evaluate_model(
                 if len(target_coords) == 0:
                     continue
 
-                # Chunk large tiles to avoid OOM
-                max_targets_per_chunk = 5000
+                n_context = len(context_coords)
                 n_targets = len(target_coords)
 
-                if n_targets > max_targets_per_chunk:
-                    # Process in chunks
-                    tile_predictions = []
-                    tile_targets = []
-                    tile_uncertainties = []
+                # Subsample context if too large to avoid OOM in attention
+                if n_context > max_context_shots:
+                    if batch_idx == 0 and i == 0:  # Only print once
+                        tqdm.write(f"Note: Subsampling context from {n_context} to {max_context_shots} shots for memory efficiency")
+                    indices = torch.randperm(n_context)[:max_context_shots]
+                    context_coords = context_coords[indices]
+                    context_embeddings = context_embeddings[indices]
+                    context_agbd = context_agbd[indices]
+                    n_context = max_context_shots
 
-                    for chunk_start in range(0, n_targets, max_targets_per_chunk):
-                        chunk_end = min(chunk_start + max_targets_per_chunk, n_targets)
+                # Process targets in chunks
+                tile_predictions = []
+                tile_targets = []
+                tile_uncertainties = []
 
-                        chunk_target_coords = target_coords[chunk_start:chunk_end]
-                        chunk_target_embeddings = target_embeddings[chunk_start:chunk_end]
-                        chunk_target_agbd = target_agbd[chunk_start:chunk_end]
+                for chunk_start in range(0, n_targets, max_targets_per_chunk):
+                    chunk_end = min(chunk_start + max_targets_per_chunk, n_targets)
 
-                        # Forward pass on chunk
-                        pred_mean, pred_log_var, _, _ = model(
-                            context_coords,
-                            context_embeddings,
-                            context_agbd,
-                            chunk_target_coords,
-                            chunk_target_embeddings,
-                            training=False
-                        )
+                    chunk_target_coords = target_coords[chunk_start:chunk_end]
+                    chunk_target_embeddings = target_embeddings[chunk_start:chunk_end]
+                    chunk_target_agbd = target_agbd[chunk_start:chunk_end]
 
-                        tile_predictions.append(pred_mean.detach().cpu().numpy().flatten())
-                        tile_targets.append(chunk_target_agbd.detach().cpu().numpy().flatten())
-
-                        if pred_log_var is not None:
-                            tile_uncertainties.append(
-                                torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
-                            )
-                        else:
-                            tile_uncertainties.append(np.zeros_like(pred_mean.detach().cpu().numpy().flatten()))
-
-                    # Concatenate chunks
-                    pred_mean_np = np.concatenate(tile_predictions)
-                    target_np = np.concatenate(tile_targets)
-                    pred_std_np = np.concatenate(tile_uncertainties)
-                else:
-                    # Process entire tile at once
+                    # Forward pass on chunk
                     pred_mean, pred_log_var, _, _ = model(
                         context_coords,
                         context_embeddings,
                         context_agbd,
-                        target_coords,
-                        target_embeddings,
+                        chunk_target_coords,
+                        chunk_target_embeddings,
                         training=False
                     )
 
-                    # Convert to numpy
-                    pred_mean_np = pred_mean.detach().cpu().numpy().flatten()
-                    target_np = target_agbd.detach().cpu().numpy().flatten()
+                    tile_predictions.append(pred_mean.detach().cpu().numpy().flatten())
+                    tile_targets.append(chunk_target_agbd.detach().cpu().numpy().flatten())
 
                     if pred_log_var is not None:
-                        pred_std_np = torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
+                        tile_uncertainties.append(
+                            torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
+                        )
                     else:
-                        pred_std_np = np.zeros_like(pred_mean_np)
+                        tile_uncertainties.append(np.zeros_like(pred_mean.detach().cpu().numpy().flatten()))
+
+                    # Clear GPU cache after each chunk
+                    if device.type == 'cuda':
+                        torch.cuda.empty_cache()
+
+                # Concatenate chunks
+                pred_mean_np = np.concatenate(tile_predictions)
+                target_np = np.concatenate(tile_targets)
+                pred_std_np = np.concatenate(tile_uncertainties)
 
                 # Store predictions
                 all_predictions.extend(pred_mean_np)
@@ -175,6 +172,10 @@ def evaluate_model(
                 # Compute metrics for this tile
                 metrics = compute_metrics(pred_mean_np, target_np, pred_std_np)
                 all_metrics.append(metrics)
+
+                # Clear GPU cache after each tile
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
 
     # Convert to arrays
     predictions = np.array(all_predictions)
