@@ -13,7 +13,9 @@ from scipy.spatial import cKDTree
 
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
-from models.neural_process import GEDINeuralProcess
+from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd, denormalize_std
+from utils.model import load_model_from_checkpoint
+from utils.config import load_config, get_global_bounds
 
 
 def parse_args():
@@ -53,49 +55,15 @@ def parse_args():
 
 def load_model_and_config(checkpoint_dir: Path, device: str):
     print("Loading model configuration...")
-    config_path = checkpoint_dir / 'config.json'
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config not found at {config_path}")
-
-    with open(config_path, 'r') as f:
-        config = json.load(f)
+    config = load_config(checkpoint_dir / 'config.json')
 
     print(f"Architecture mode: {config.get('architecture_mode', 'deterministic')}")
 
-    # Initialize model
+    # Initialize and load model using utility function
     print("Initializing model...")
-    model = GEDINeuralProcess(
-        patch_size=config.get('patch_size', 3),
-        embedding_channels=128,
-        embedding_feature_dim=config.get('embedding_feature_dim', 128),
-        context_repr_dim=config.get('context_repr_dim', 128),
-        hidden_dim=config.get('hidden_dim', 512),
-        latent_dim=config.get('latent_dim', 128),
-        output_uncertainty=True,
-        architecture_mode=config.get('architecture_mode', 'deterministic'),
-        num_attention_heads=config.get('num_attention_heads', 4)
-    ).to(device)
-
-    # Load checkpoint - try best_r2_model.pt first, then best_model.pt
-    checkpoint_files = ['best_r2_model.pt', 'best_model.pt']
-    checkpoint_path = None
-
-    for ckpt_file in checkpoint_files:
-        path = checkpoint_dir / ckpt_file
-        if path.exists():
-            checkpoint_path = path
-            break
-
-    if checkpoint_path is None:
-        raise FileNotFoundError(
-            f"No checkpoint found in {checkpoint_dir}. "
-            f"Looked for: {checkpoint_files}"
-        )
-
-    print(f"Loading checkpoint: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
+    model, checkpoint, checkpoint_path = load_model_from_checkpoint(
+        checkpoint_dir, device
+    )
 
     print(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}")
     if 'val_metrics' in checkpoint:
@@ -217,31 +185,6 @@ def extract_embeddings(
     return result_df
 
 
-def normalize_coords(coords: np.ndarray, global_bounds: tuple) -> np.ndarray:
-    lon_min, lat_min, lon_max, lat_max = global_bounds
-
-    lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
-    lat_range = lat_max - lat_min if lat_max > lat_min else 1.0
-
-    normalized = coords.copy()
-    normalized[:, 0] = (coords[:, 0] - lon_min) / lon_range
-    normalized[:, 1] = (coords[:, 1] - lat_min) / lat_range
-
-    return normalized
-
-
-def normalize_agbd(agbd: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    return np.log1p(agbd) / np.log1p(agbd_scale)
-
-
-def denormalize_agbd(agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    return np.expm1(agbd_norm * np.log1p(agbd_scale))
-
-
-def denormalize_std(std_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    return std_norm * np.log1p(agbd_scale)
-
-
 def run_inference(
     model: torch.nn.Module,
     context_df: pd.DataFrame,
@@ -302,7 +245,7 @@ def run_inference(
     uncertainties_norm = np.concatenate(all_uncertainties)
 
     predictions = denormalize_agbd(predictions_norm)
-    uncertainties = denormalize_std(uncertainties_norm)
+    uncertainties = denormalize_std(uncertainties_norm, predictions_norm, simple_transform=True)
 
     print(f"\nPrediction statistics:")
     print(f"  Mean AGB: {predictions.mean():.2f} Mg/ha")
@@ -452,7 +395,7 @@ def main():
     checkpoint_dir = Path(args.checkpoint)
     model, config = load_model_and_config(checkpoint_dir, args.device)
 
-    global_bounds = tuple(config['global_bounds'])
+    global_bounds = get_global_bounds(config)
     print(f"\nGlobal coordinate bounds from training:")
     print(f"  Lon: [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}]")
     print(f"  Lat: [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
@@ -460,8 +403,8 @@ def main():
     context_df = query_context_gedi(
         tuple(args.region),
         args.n_context,
-        args.gedi_start_time,
-        args.gedi_end_time
+        args.start_time,
+        args.end_time
     )
 
     print(f"\nInitializing GeoTessera extractor (year={args.embedding_year})...")

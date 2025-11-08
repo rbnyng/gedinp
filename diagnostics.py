@@ -13,40 +13,9 @@ from tqdm import tqdm
 from scipy.stats import norm, probplot
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from models.neural_process import GEDINeuralProcess
-
-
-def denormalize_agbd(agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    return np.expm1(agbd_norm * np.log1p(agbd_scale))
-
-
-def denormalize_std(std_norm: np.ndarray, agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    """
-    Convert normalized standard deviation to raw values (Mg/ha).
-
-    Uses the derivative of the log transform at the predicted mean:
-    d/dx[log(1+x)] = 1/(1+x)
-
-    For log-normal distributions, the standard deviation transforms as:
-    std_raw ≈ std_norm * log(1+scale) * (1 + mean_raw)
-
-    Args:
-        std_norm: Normalized standard deviation
-        agbd_norm: Normalized AGBD mean values (for proper scaling)
-        agbd_scale: Scale factor (default: 200.0)
-
-    Returns:
-        Raw standard deviation in Mg/ha
-    """
-    # Denormalize the mean first to get the scale factor
-    mean_raw = denormalize_agbd(agbd_norm, agbd_scale)
-
-    # Transform std using derivative of log at the mean
-    # For log(1+x), derivative is 1/(1+x), but we're in normalized space
-    # so we need to scale by log(1+scale) and multiply by (1+mean_raw)
-    std_raw = std_norm * np.log1p(agbd_scale) * (1 + mean_raw)
-
-    return std_raw
+from utils.normalization import denormalize_agbd, denormalize_std
+from utils.config import load_config
+from utils.model import load_model_from_checkpoint
 
 
 def plot_learning_curves(history_path, output_path):
@@ -495,8 +464,7 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
     print()
 
     # Load config
-    with open(model_dir / 'config.json', 'r') as f:
-        config = json.load(f)
+    config = load_config(model_dir / 'config.json')
 
     # 1. Learning curves
     print("[1/4] Generating learning curves...")
@@ -552,20 +520,9 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
             )
 
             # Load model
-            model = GEDINeuralProcess(
-                patch_size=config.get('patch_size', 3),
-                embedding_channels=128,
-                embedding_feature_dim=config.get('embedding_feature_dim', 128),
-                context_repr_dim=config.get('context_repr_dim', 128),
-                hidden_dim=config.get('hidden_dim', 512),
-                latent_dim=config.get('latent_dim', 128),
-                output_uncertainty=True,
-                architecture_mode=config.get('architecture_mode', 'deterministic'),
-                num_attention_heads=config.get('num_attention_heads', 4)
-            ).to(device)
-
-            checkpoint = torch.load(model_dir / 'best_r2_model.pt', map_location=device, weights_only=False)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            model, checkpoint, checkpoint_path = load_model_from_checkpoint(
+                model_dir, device
+            )
         else:
             print("  ⚠ processed_data.pkl not found, cannot load validation data")
     else:

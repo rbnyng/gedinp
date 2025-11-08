@@ -17,9 +17,10 @@ from data.spatial_cv import SpatialTileSplitter
 from models.neural_process import (
     GEDINeuralProcess,
     neural_process_loss,
-    compute_metrics
 )
 from diagnostics import generate_all_diagnostics
+from utils.evaluation import compute_metrics
+from utils.config import save_config
 
 
 def parse_args():
@@ -245,7 +246,7 @@ def validate(model, dataloader, device, kl_weight=1.0):
                 n_tiles_in_batch += 1
 
                 pred_std = torch.exp(0.5 * pred_log_var) if pred_log_var is not None else None
-                metrics = compute_metrics(pred_mean, pred_std, target_agbd)
+                metrics = compute_metrics(pred_mean, target_agbd, pred_std)
                 all_metrics.append(metrics)
 
             if n_tiles_in_batch > 0:
@@ -274,8 +275,7 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(output_dir / 'config.json', 'w') as f:
-        json.dump(vars(args), f, indent=2)
+    save_config(vars(args), output_dir / 'config.json')
 
     print("=" * 80)
     print("GEDI Neural Process Training")
@@ -377,8 +377,7 @@ def main():
     config['global_bounds'] = list(global_bounds)
     if args.train_years is not None:
         config['train_years'] = args.train_years
-    with open(output_dir / 'config.json', 'w') as f:
-        json.dump(config, f, indent=2)
+    save_config(config, output_dir / 'config.json')
 
     print("Step 4: Creating datasets...")
     train_dataset = GEDINeuralProcessDataset(

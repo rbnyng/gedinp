@@ -14,169 +14,9 @@ import seaborn as sns
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from models.neural_process import GEDINeuralProcess, compute_metrics
-
-def convert_to_serializable(obj):
-    if isinstance(obj, dict):
-        return {key: convert_to_serializable(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_serializable(item) for item in obj]
-    elif isinstance(obj, tuple):
-        return tuple(convert_to_serializable(item) for item in obj)
-    elif isinstance(obj, (np.integer, np.int32, np.int64)):
-        return int(obj)
-    elif isinstance(obj, (np.floating, np.float32, np.float64)):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, np.bool_):
-        return bool(obj)
-    else:
-        return obj
-        
-def evaluate_model(model, dataloader, device):
-    """Evaluate model on a dataset."""
-    model.eval()
-    all_predictions = []
-    all_targets = []
-    all_uncertainties = []
-    all_metrics = []
-
-    with torch.no_grad():
-        for batch in tqdm(dataloader, desc='Evaluating'):
-            for i in range(len(batch['context_coords'])):
-                context_coords = batch['context_coords'][i].to(device)
-                context_embeddings = batch['context_embeddings'][i].to(device)
-                context_agbd = batch['context_agbd'][i].to(device)
-                target_coords = batch['target_coords'][i].to(device)
-                target_embeddings = batch['target_embeddings'][i].to(device)
-                target_agbd = batch['target_agbd'][i].to(device)
-
-                if len(target_coords) == 0:
-                    continue
-
-                # Forward pass
-                pred_mean, pred_log_var, _, _ = model(
-                    context_coords,
-                    context_embeddings,
-                    context_agbd,
-                    target_coords,
-                    target_embeddings,
-                    training=False
-                )
-
-                # Convert to numpy
-                pred_mean_np = pred_mean.detach().cpu().numpy().flatten()
-                target_np = target_agbd.detach().cpu().numpy().flatten()
-
-                if pred_log_var is not None:
-                    pred_std_np = torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
-                else:
-                    pred_std_np = np.zeros_like(pred_mean_np)
-
-                # Store predictions
-                all_predictions.extend(pred_mean_np)
-                all_targets.extend(target_np)
-                all_uncertainties.extend(pred_std_np)
-
-                # Compute metrics for this tile
-                pred_std = torch.exp(0.5 * pred_log_var) if pred_log_var is not None else None
-                metrics = compute_metrics(pred_mean, pred_std, target_agbd)
-                all_metrics.append(metrics)
-
-    # Convert to arrays
-    predictions = np.array(all_predictions)
-    targets = np.array(all_targets)
-    uncertainties = np.array(all_uncertainties)
-
-    # Aggregate metrics
-    avg_metrics = {}
-    if len(all_metrics) > 0:
-        for key in all_metrics[0].keys():
-            avg_metrics[key] = np.mean([m[key] for m in all_metrics])
-
-    return predictions, targets, uncertainties, avg_metrics
-
-
-def plot_results(predictions, targets, uncertainties, output_dir, dataset_name='temporal'):
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle(f'Temporal Validation: {dataset_name}', fontsize=16, fontweight='bold')
-
-    ax = axes[0, 0]
-    ax.scatter(targets, predictions, alpha=0.3, s=10)
-    min_val = min(targets.min(), predictions.min())
-    max_val = max(targets.max(), predictions.max())
-    ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect prediction')
-    ax.set_xlabel('True AGBD', fontweight='bold')
-    ax.set_ylabel('Predicted AGBD', fontweight='bold')
-    ax.set_title('Predictions vs Truth')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ss_res = ((targets - predictions) ** 2).sum()
-    ss_tot = ((targets - targets.mean()) ** 2).sum()
-    r2 = 1 - ss_res / (ss_tot + 1e-8)
-    ax.text(0.05, 0.95, f'R² = {r2:.4f}', transform=ax.transAxes,
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    ax = axes[0, 1]
-    residuals = predictions - targets
-    ax.scatter(predictions, residuals, alpha=0.3, s=10)
-    ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('Predicted AGBD', fontweight='bold')
-    ax.set_ylabel('Residual (Pred - True)', fontweight='bold')
-    ax.set_title('Residual Plot')
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[1, 0]
-    ax.hist(residuals, bins=50, edgecolor='black', alpha=0.7)
-    ax.axvline(x=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('Residual', fontweight='bold')
-    ax.set_ylabel('Frequency', fontweight='bold')
-    ax.set_title('Distribution of Residuals')
-    ax.grid(True, alpha=0.3, axis='y')
-
-    rmse = np.sqrt(np.mean(residuals ** 2))
-    mae = np.mean(np.abs(residuals))
-    ax.text(0.05, 0.95, f'RMSE = {rmse:.4f}\nMAE = {mae:.4f}',
-            transform=ax.transAxes, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    ax = axes[1, 1]
-    if uncertainties is not None and uncertainties.std() > 0:
-        sorted_indices = np.argsort(uncertainties)
-        sorted_uncertainties = uncertainties[sorted_indices]
-        sorted_errors = np.abs(residuals[sorted_indices])
-
-        n_bins = 20
-        bin_size = len(sorted_uncertainties) // n_bins
-        bin_uncertainties = []
-        bin_errors = []
-
-        for i in range(n_bins):
-            start_idx = i * bin_size
-            end_idx = (i + 1) * bin_size if i < n_bins - 1 else len(sorted_uncertainties)
-            bin_uncertainties.append(sorted_uncertainties[start_idx:end_idx].mean())
-            bin_errors.append(sorted_errors[start_idx:end_idx].mean())
-
-        ax.scatter(bin_uncertainties, bin_errors, s=50)
-        min_val = min(min(bin_uncertainties), min(bin_errors))
-        max_val = max(max(bin_uncertainties), max(bin_errors))
-        ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect calibration')
-        ax.set_xlabel('Predicted Uncertainty (σ)', fontweight='bold')
-        ax.set_ylabel('Actual Error (|pred - true|)', fontweight='bold')
-        ax.set_title('Uncertainty Calibration')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    else:
-        ax.text(0.5, 0.5, 'No uncertainty predictions', ha='center', va='center',
-                transform=ax.transAxes)
-        ax.set_title('Uncertainty Calibration')
-
-    plt.tight_layout()
-    plt.savefig(output_dir / f'temporal_eval_{dataset_name}.png', dpi=300, bbox_inches='tight')
-    print(f"Saved evaluation plot to: {output_dir / f'temporal_eval_{dataset_name}.png'}")
+from utils.evaluation import evaluate_model, plot_results, compute_metrics
+from utils.config import load_config, save_config, get_global_bounds
+from utils.model import load_model_from_checkpoint
 
 
 def main():
@@ -214,8 +54,7 @@ def main():
     print("TEMPORAL VALIDATION - GEDI NEURAL PROCESS")
     print("=" * 80)
 
-    with open(model_dir / 'config.json', 'r') as f:
-        config = json.load(f)
+    config = load_config(model_dir / 'config.json')
 
     print(f"Model directory: {model_dir}")
     print(f"Checkpoint: {args.checkpoint}")
@@ -295,7 +134,7 @@ def main():
     print("Step 3: Creating evaluation dataset...")
     print("=" * 80)
 
-    global_bounds = tuple(config['global_bounds'])
+    global_bounds = get_global_bounds(config)
     print(f"Using global bounds from training: {global_bounds}")
 
     eval_dataset = GEDINeuralProcessDataset(
@@ -319,23 +158,9 @@ def main():
     print("Step 4: Loading trained model...")
     print("=" * 80)
 
-    model = GEDINeuralProcess(
-        patch_size=config.get('patch_size', 3),
-        embedding_channels=128,
-        embedding_feature_dim=config.get('embedding_feature_dim', 128),
-        context_repr_dim=config.get('context_repr_dim', 128),
-        hidden_dim=config.get('hidden_dim', 512),
-        latent_dim=config.get('latent_dim', 128),
-        output_uncertainty=True,
-        architecture_mode=config.get('architecture_mode', 'deterministic'),
-        num_attention_heads=config.get('num_attention_heads', 4)
-    ).to(args.device)
-
-    # Load checkpoint
-    checkpoint_path = model_dir / args.checkpoint
-    print(f"Loading checkpoint from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=args.device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model, checkpoint, checkpoint_path = load_model_from_checkpoint(
+        model_dir, args.device, args.checkpoint
+    )
 
     print(f"Checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
     if 'val_metrics' in checkpoint:
@@ -371,8 +196,7 @@ def main():
     }
 
     results_path = model_dir / f'temporal_results_{output_suffix}.json'
-    with open(results_path, 'w') as f:
-        json.dump(convert_to_serializable(results), f, indent=2)
+    save_config(results, results_path)
     print(f"Saved metrics to: {results_path}")
 
     results_df = pd.DataFrame({
