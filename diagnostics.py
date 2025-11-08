@@ -583,7 +583,8 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
                 latent_dim=config.get('latent_dim', 128),
                 output_uncertainty=True,
                 architecture_mode=config.get('architecture_mode', 'deterministic'),
-                num_attention_heads=config.get('num_attention_heads', 4)
+                num_attention_heads=config.get('num_attention_heads', 4),
+                likelihood_type=config.get('likelihood', 'gaussian-log')
             ).to(device)
 
             checkpoint = torch.load(model_dir / 'best_r2_model.pt', map_location=device, weights_only=False)

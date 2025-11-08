@@ -85,6 +85,7 @@ def load_model_and_config(checkpoint_dir: Path, device: str):
         config = json.load(f)
 
     print(f"Architecture mode: {config.get('architecture_mode', 'deterministic')}")
+    print(f"Likelihood: {config.get('likelihood', 'gaussian-log')}")
 
     # Initialize model
     print("Initializing model...")
@@ -97,7 +98,8 @@ def load_model_and_config(checkpoint_dir: Path, device: str):
         latent_dim=config.get('latent_dim', 128),
         output_uncertainty=True,
         architecture_mode=config.get('architecture_mode', 'deterministic'),
-        num_attention_heads=config.get('num_attention_heads', 4)
+        num_attention_heads=config.get('num_attention_heads', 4),
+        likelihood_type=config.get('likelihood', 'gaussian-log')
     ).to(device)
 
     # Load checkpoint - try best_r2_model.pt first, then best_model.pt

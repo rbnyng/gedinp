@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Callable
+from .likelihoods import get_likelihood_function, get_likelihood_param_name
 
 
 class EmbeddingEncoder(nn.Module):
@@ -144,9 +145,12 @@ class Decoder(nn.Module):
     """
     Decode query point + context representation to AGBD prediction.
 
-    IMPORTANT: This decoder outputs (mean, log_var) where log_var is the
-    logarithm of the VARIANCE (not standard deviation).
-    Convention: log_var = log(variance), so variance = exp(log_var), std = exp(0.5 * log_var)
+    Outputs (mean, param) where param depends on the likelihood:
+    - gaussian-log/lognormal: log_var (log of variance)
+    - gamma: log_concentration (log of shape parameter α)
+
+    Convention for gaussian-log/lognormal:
+        log_var = log(variance), so variance = exp(log_var), std = exp(0.5 * log_var)
     """
 
     def __init__(
@@ -155,7 +159,8 @@ class Decoder(nn.Module):
         embedding_dim: int = 128,
         context_dim: int = 128,
         hidden_dim: int = 256,
-        output_uncertainty: bool = True
+        output_uncertainty: bool = True,
+        likelihood_type: str = 'gaussian-log'
     ):
         """
         Initialize decoder.
@@ -166,10 +171,12 @@ class Decoder(nn.Module):
             context_dim: Context representation dimension
             hidden_dim: Hidden layer dimension
             output_uncertainty: Whether to output uncertainty estimate
+            likelihood_type: Type of likelihood ('gaussian-log', 'lognormal', 'gamma')
         """
         super().__init__()
 
         self.output_uncertainty = output_uncertainty
+        self.likelihood_type = likelihood_type
         input_dim = coord_dim + embedding_dim + context_dim
 
         self.fc1 = nn.Linear(input_dim, hidden_dim)
@@ -183,7 +190,8 @@ class Decoder(nn.Module):
         self.mean_head = nn.Linear(hidden_dim, 1)
 
         if output_uncertainty:
-            self.log_var_head = nn.Linear(hidden_dim, 1)
+            # Generic parameter head (log_var or log_concentration)
+            self.param_head = nn.Linear(hidden_dim, 1)
 
     def forward(
         self,
@@ -200,7 +208,9 @@ class Decoder(nn.Module):
             context_repr: (batch, context_dim)
 
         Returns:
-            (mean, log_variance) predictions, where log_variance is None if not output_uncertainty
+            (mean, param) predictions, where param is None if not output_uncertainty
+            - For gaussian-log/lognormal: (mean, log_var)
+            - For gamma: (mean, log_concentration)
         """
         x = torch.cat([query_coords, query_embedding_features, context_repr], dim=-1)
 
@@ -217,11 +227,19 @@ class Decoder(nn.Module):
         mean = self.mean_head(x)
 
         if self.output_uncertainty:
-            log_var = self.log_var_head(x)
-            # Clamp log_var to prevent numerical instability
-            # Range: variance between ~0.001 and ~150
-            log_var = torch.clamp(log_var, min=-7, max=5)
-            return mean, log_var
+            param = self.param_head(x)
+
+            # Apply appropriate clamping based on likelihood type
+            if self.likelihood_type in ['gaussian-log', 'lognormal']:
+                # Clamp log_var to prevent numerical instability
+                # Range: variance between ~0.001 and ~150
+                param = torch.clamp(param, min=-7, max=5)
+            elif self.likelihood_type == 'gamma':
+                # Clamp log_concentration
+                # Range: concentration between ~0.1 and ~150
+                param = torch.clamp(param, min=-2.3, max=5)
+
+            return mean, param
         else:
             return mean, None
 
@@ -371,7 +389,8 @@ class GEDINeuralProcess(nn.Module):
         latent_dim: int = 128,
         output_uncertainty: bool = True,
         architecture_mode: str = 'deterministic',
-        num_attention_heads: int = 4
+        num_attention_heads: int = 4,
+        likelihood_type: str = 'gaussian-log'
     ):
         """
         Initialize Neural Process.
@@ -386,6 +405,7 @@ class GEDINeuralProcess(nn.Module):
             output_uncertainty: Whether to predict uncertainty
             architecture_mode: 'deterministic', 'latent', 'anp', or 'cnp'
             num_attention_heads: Number of attention heads
+            likelihood_type: Type of likelihood ('gaussian-log', 'lognormal', 'gamma')
         """
         super().__init__()
 
@@ -395,6 +415,7 @@ class GEDINeuralProcess(nn.Module):
         self.output_uncertainty = output_uncertainty
         self.architecture_mode = architecture_mode
         self.latent_dim = latent_dim
+        self.likelihood_type = likelihood_type
 
         # Determine which components to use
         self.use_attention = architecture_mode in ['deterministic', 'anp']
@@ -446,7 +467,8 @@ class GEDINeuralProcess(nn.Module):
             embedding_dim=embedding_feature_dim,
             context_dim=decoder_context_dim,
             hidden_dim=hidden_dim,
-            output_uncertainty=output_uncertainty
+            output_uncertainty=output_uncertainty,
+            likelihood_type=likelihood_type
         )
 
     def forward(
@@ -604,38 +626,42 @@ def kl_divergence_gaussian(
 
 def neural_process_loss(
     pred_mean: torch.Tensor,
-    pred_log_var: Optional[torch.Tensor],
+    pred_param: Optional[torch.Tensor],
     target: torch.Tensor,
     z_mu: Optional[torch.Tensor] = None,
     z_log_sigma: Optional[torch.Tensor] = None,
-    kl_weight: float = 1.0
+    kl_weight: float = 1.0,
+    likelihood_fn: Optional[Callable] = None
 ) -> Tuple[torch.Tensor, dict]:
     """
-    Loss for Neural Process with optional KL divergence.
+    Loss for Neural Process with configurable likelihood and optional KL divergence.
 
     Args:
         pred_mean: Predicted means (batch, 1)
-        pred_log_var: Predicted log variances (batch, 1) or None
+        pred_param: Predicted likelihood parameters (batch, 1) or None
+            - For gaussian-log/lognormal: log_var
+            - For gamma: log_concentration
         target: Target values (batch, 1)
         z_mu: Latent mean (1, latent_dim) or None
         z_log_sigma: Latent log std (1, latent_dim) or None
         kl_weight: Weight for KL divergence term (beta-VAE style)
+        likelihood_fn: Likelihood function to use. If None, uses MSE loss.
 
     Returns:
         (total_loss, loss_dict) where loss_dict contains individual components
     """
     # Reconstruction loss (negative log-likelihood)
-    if pred_log_var is not None:
-        # Gaussian negative log-likelihood
-        nll = 0.5 * (
-            pred_log_var +
-            torch.exp(-pred_log_var) * (target - pred_mean) ** 2
-        )
+    if pred_param is not None and likelihood_fn is not None:
+        # Use specified likelihood function
+        nll = likelihood_fn(pred_mean, pred_param, target)
+    elif pred_param is not None:
+        # Backward compatibility: default to Gaussian NLL
+        from .likelihoods import gaussian_log_nll
+        nll = gaussian_log_nll(pred_mean, pred_param, target)
     else:
-        # MSE loss
+        # MSE loss (no uncertainty)
         nll = (target - pred_mean) ** 2
-
-    nll = nll.mean()
+        nll = nll.mean()
 
     # KL divergence (if latent path is used)
     kl = torch.tensor(0.0, device=pred_mean.device)

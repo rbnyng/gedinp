@@ -23,6 +23,7 @@ from models.neural_process import (
     neural_process_loss,
     compute_metrics
 )
+from models.likelihoods import get_likelihood_function
 from diagnostics import generate_all_diagnostics
 
 
@@ -58,6 +59,10 @@ def parse_args():
                              'latent (stochastic only), anp (both), cnp (baseline)')
     parser.add_argument('--num_attention_heads', type=int, default=4,
                         help='Number of attention heads')
+    parser.add_argument('--likelihood', type=str, default='gaussian-log',
+                        choices=['gaussian-log', 'lognormal', 'gamma'],
+                        help='Likelihood distribution: gaussian-log (Gaussian on log-transformed data), '
+                             'lognormal (explicit log-normal), gamma (Gamma distribution)')
 
     # Training arguments
     parser.add_argument('--batch_size', type=int, default=16,
@@ -120,7 +125,7 @@ def set_seed(seed):
         torch.cuda.manual_seed(seed)
 
 
-def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
+def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0, likelihood_fn=None):
     """Train for one epoch."""
     model.train()
     total_loss = 0
@@ -162,7 +167,7 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
             # Compute loss
             loss, loss_dict = neural_process_loss(
                 pred_mean, pred_log_var, target_agbd,
-                z_mu, z_log_sigma, kl_weight
+                z_mu, z_log_sigma, kl_weight, likelihood_fn
             )
 
             # Check for NaN/Inf
@@ -196,7 +201,7 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
     }
 
 
-def validate(model, dataloader, device, kl_weight=1.0):
+def validate(model, dataloader, device, kl_weight=1.0, likelihood_fn=None):
     """Validate the model."""
     model.eval()
     total_loss = 0
@@ -236,7 +241,7 @@ def validate(model, dataloader, device, kl_weight=1.0):
                 # Compute loss
                 loss, loss_dict = neural_process_loss(
                     pred_mean, pred_log_var, target_agbd,
-                    z_mu, z_log_sigma, kl_weight
+                    z_mu, z_log_sigma, kl_weight, likelihood_fn
                 )
 
                 # Check for NaN/Inf
@@ -405,6 +410,7 @@ def main():
     # Step 5: Initialize model
     print("Step 5: Initializing model...")
     print(f"Architecture mode: {args.architecture_mode}")
+    print(f"Likelihood: {args.likelihood}")
     model = GEDINeuralProcess(
         patch_size=args.patch_size,
         embedding_channels=128,
@@ -414,7 +420,8 @@ def main():
         latent_dim=args.latent_dim,
         output_uncertainty=True,
         architecture_mode=args.architecture_mode,
-        num_attention_heads=args.num_attention_heads
+        num_attention_heads=args.num_attention_heads,
+        likelihood_type=args.likelihood
     ).to(args.device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -433,6 +440,10 @@ def main():
 
     # Step 6: Training loop
     print("Step 6: Training...")
+
+    # Get likelihood function
+    likelihood_fn = get_likelihood_function(args.likelihood)
+
     best_val_loss = float('inf')
     best_r2 = float('-inf')
     epochs_without_improvement = 0
@@ -450,11 +461,11 @@ def main():
             kl_weight = args.kl_weight_max
 
         # Train
-        train_metrics = train_epoch(model, train_loader, optimizer, args.device, kl_weight)
+        train_metrics = train_epoch(model, train_loader, optimizer, args.device, kl_weight, likelihood_fn)
         train_losses.append(train_metrics['loss'])
 
         # Validate
-        val_losses_dict, val_metrics = validate(model, val_loader, args.device, kl_weight)
+        val_losses_dict, val_metrics = validate(model, val_loader, args.device, kl_weight, likelihood_fn)
         val_losses.append(val_losses_dict['loss'])
 
         # Print metrics (using scientific notation for losses)
