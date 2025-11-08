@@ -43,6 +43,9 @@ def main():
 
     model_dir = Path(args.model_dir)
 
+    # Convert device string to torch.device
+    device = torch.device(args.device)
+
     # Load config
     config = load_config(model_dir / 'config.json')
 
@@ -52,7 +55,7 @@ def main():
     print(f"Model directory: {model_dir}")
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Architecture: {config.get('architecture_mode', 'deterministic')}")
-    print(f"Device: {args.device}")
+    print(f"Device: {device}")
     print()
 
     # Load test data - use processed pickle file for embeddings
@@ -117,7 +120,7 @@ def main():
     # Initialize and load model
     print("Initializing model...")
     model, checkpoint, checkpoint_path = load_model_from_checkpoint(
-        model_dir, args.device, args.checkpoint
+        model_dir, device, args.checkpoint
     )
 
     print(f"Checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
@@ -131,7 +134,7 @@ def main():
     print("Evaluating on test set...")
     print(f"Memory settings: max_context={args.max_context_shots}, max_targets_per_chunk={args.max_targets_per_chunk}")
     predictions, targets, uncertainties, metrics = evaluate_model(
-        model, test_loader, args.device,
+        model, test_loader, device,
         max_context_shots=args.max_context_shots,
         max_targets_per_chunk=args.max_targets_per_chunk
     )

@@ -156,7 +156,8 @@ def evaluate_model(
                         tile_uncertainties.append(np.zeros_like(pred_mean.detach().cpu().numpy().flatten()))
 
                     # Clear GPU cache after each chunk
-                    if device.type == 'cuda':
+                    device_str = str(device) if not isinstance(device, str) else device
+                    if 'cuda' in device_str:
                         torch.cuda.empty_cache()
 
                 # Concatenate chunks
@@ -174,7 +175,8 @@ def evaluate_model(
                 all_metrics.append(metrics)
 
                 # Clear GPU cache after each tile
-                if device.type == 'cuda':
+                device_str = str(device) if not isinstance(device, str) else device
+                if 'cuda' in device_str:
                     torch.cuda.empty_cache()
 
     # Convert to arrays
