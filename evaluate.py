@@ -50,7 +50,18 @@ def main():
     print(f"Device: {args.device}")
     print()
 
-    # Load test data
+    # Load test data - use processed pickle file for embeddings
+    processed_pkl = model_dir / 'processed_data.pkl'
+    if not processed_pkl.exists():
+        print(f"Error: Processed data not found at {processed_pkl}")
+        print("The processed_data.pkl file contains embeddings and is required for evaluation.")
+        return
+
+    print(f"Loading processed data from: {processed_pkl}")
+    with open(processed_pkl, 'rb') as f:
+        full_df = pickle.load(f)
+
+    # Load test split indices
     if args.test_split:
         test_csv = Path(args.test_split)
     else:
@@ -60,14 +71,22 @@ def main():
         print(f"Error: Test split not found at {test_csv}")
         return
 
-    print(f"Loading test data from: {test_csv}")
-    test_df = pd.read_csv(test_csv)
+    print(f"Loading test split from: {test_csv}")
+    test_split_df = pd.read_csv(test_csv)
 
-    # Convert embedding_patch from string back to array
-    if 'embedding_patch' in test_df.columns and isinstance(test_df['embedding_patch'].iloc[0], str):
-        test_df['embedding_patch'] = test_df['embedding_patch'].apply(
-            lambda x: np.array(eval(x)) if isinstance(x, str) else x
-        )
+    # Merge to get test data with embeddings
+    # Use tile_id and shot indices to match rows
+    if 'shot_number' in full_df.columns and 'shot_number' in test_split_df.columns:
+        merge_cols = ['tile_id', 'shot_number']
+    else:
+        # Fallback to using lat/lon for matching
+        merge_cols = ['tile_id', 'latitude', 'longitude']
+
+    test_df = full_df.merge(
+        test_split_df[merge_cols].drop_duplicates(),
+        on=merge_cols,
+        how='inner'
+    )
 
     print(f"Test set: {len(test_df)} shots across {test_df['tile_id'].nunique()} tiles")
 
