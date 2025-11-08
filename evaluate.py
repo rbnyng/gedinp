@@ -31,12 +31,20 @@ def main():
     parser.add_argument('--test_split', type=str, default=None,
                         help='Path to test split CSV (default: model_dir/test_split.csv)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='Batch size (default: 1 for memory safety)')
     parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--max_context_shots', type=int, default=20000,
+                        help='Maximum context shots per tile (subsample if exceeded)')
+    parser.add_argument('--max_targets_per_chunk', type=int, default=1000,
+                        help='Maximum target shots to process at once')
 
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir)
+
+    # Convert device string to torch.device
+    device = torch.device(args.device)
 
     # Load config
     config = load_config(model_dir / 'config.json')
@@ -47,7 +55,7 @@ def main():
     print(f"Model directory: {model_dir}")
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Architecture: {config.get('architecture_mode', 'deterministic')}")
-    print(f"Device: {args.device}")
+    print(f"Device: {device}")
     print()
 
     # Load test data - use processed pickle file for embeddings
@@ -112,7 +120,7 @@ def main():
     # Initialize and load model
     print("Initializing model...")
     model, checkpoint, checkpoint_path = load_model_from_checkpoint(
-        model_dir, args.device, args.checkpoint
+        model_dir, device, args.checkpoint
     )
 
     print(f"Checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
@@ -124,8 +132,11 @@ def main():
 
     # Evaluate
     print("Evaluating on test set...")
+    print(f"Memory settings: max_context={args.max_context_shots}, max_targets_per_chunk={args.max_targets_per_chunk}")
     predictions, targets, uncertainties, metrics = evaluate_model(
-        model, test_loader, args.device
+        model, test_loader, device,
+        max_context_shots=args.max_context_shots,
+        max_targets_per_chunk=args.max_targets_per_chunk
     )
 
     # Print results
