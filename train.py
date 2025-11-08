@@ -36,6 +36,10 @@ def parse_args():
                         help='Start date for GEDI data (YYYY-MM-DD)')
     parser.add_argument('--end_time', type=str, default='2023-12-31',
                         help='End date for GEDI data (YYYY-MM-DD)')
+    parser.add_argument('--train_years', type=int, nargs='+', default=None,
+                        help='Specific years to use for training (e.g., 2019 2020 2021). '
+                             'If specified, only GEDI shots from these years will be used '
+                             'for training, enabling temporal validation on held-out years.')
     parser.add_argument('--embedding_year', type=int, default=2024,
                         help='Year of GeoTessera embeddings')
     parser.add_argument('--cache_dir', type=str, default='./cache',
@@ -308,6 +312,37 @@ def main():
         end_time=args.end_time
     )
     print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
+
+    # Apply temporal filtering if train_years is specified
+    if args.train_years is not None:
+        print(f"\nApplying temporal filtering: using only years {args.train_years} for training")
+
+        # Extract year from timestamp if available
+        if 'time' in gedi_df.columns:
+            gedi_df['year'] = pd.to_datetime(gedi_df['time']).dt.year
+        elif 'date_time' in gedi_df.columns:
+            gedi_df['year'] = pd.to_datetime(gedi_df['date_time']).dt.year
+        elif 'datetime' in gedi_df.columns:
+            gedi_df['year'] = pd.to_datetime(gedi_df['datetime']).dt.year
+        else:
+            # Try to infer from index if it's a datetime
+            try:
+                gedi_df['year'] = pd.to_datetime(gedi_df.index).year
+            except:
+                print("Warning: Could not find timestamp column for temporal filtering.")
+                print(f"Available columns: {list(gedi_df.columns)}")
+                print("Skipping temporal filtering.")
+                args.train_years = None  # Disable for this run
+
+        # Filter to specified years
+        if args.train_years is not None:
+            n_before = len(gedi_df)
+            gedi_df = gedi_df[gedi_df['year'].isin(args.train_years)]
+            n_after = len(gedi_df)
+            print(f"Filtered from {n_before} to {n_after} shots ({n_after/n_before*100:.1f}% retained)")
+            print(f"Shots per year: {dict(gedi_df['year'].value_counts().sort_index())}")
+
+    print(f"\nFinal dataset: {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
     print()
 
     if len(gedi_df) == 0:
@@ -361,9 +396,11 @@ def main():
     print(f"Global bounds: lon [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}], "
           f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
 
-    # Save global bounds to config for future evaluation
+    # Save global bounds and temporal info to config for future evaluation
     config = vars(args)
     config['global_bounds'] = list(global_bounds)
+    if args.train_years is not None:
+        config['train_years'] = args.train_years
     with open(output_dir / 'config.json', 'w') as f:
         json.dump(config, f, indent=2)
 
