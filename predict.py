@@ -14,6 +14,7 @@ from scipy.spatial import cKDTree
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from models.neural_process import GEDINeuralProcess
+from utils.transforms import normalize_coords, normalize_agbd, denormalize_agbd, denormalize_std
 
 
 def parse_args():
@@ -217,31 +218,6 @@ def extract_embeddings(
     return result_df
 
 
-def normalize_coords(coords: np.ndarray, global_bounds: tuple) -> np.ndarray:
-    lon_min, lat_min, lon_max, lat_max = global_bounds
-
-    lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
-    lat_range = lat_max - lat_min if lat_max > lat_min else 1.0
-
-    normalized = coords.copy()
-    normalized[:, 0] = (coords[:, 0] - lon_min) / lon_range
-    normalized[:, 1] = (coords[:, 1] - lat_min) / lat_range
-
-    return normalized
-
-
-def normalize_agbd(agbd: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    return np.log1p(agbd) / np.log1p(agbd_scale)
-
-
-def denormalize_agbd(agbd_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    return np.expm1(agbd_norm * np.log1p(agbd_scale))
-
-
-def denormalize_std(std_norm: np.ndarray, agbd_scale: float = 200.0) -> np.ndarray:
-    return std_norm * np.log1p(agbd_scale)
-
-
 def run_inference(
     model: torch.nn.Module,
     context_df: pd.DataFrame,
@@ -302,7 +278,7 @@ def run_inference(
     uncertainties_norm = np.concatenate(all_uncertainties)
 
     predictions = denormalize_agbd(predictions_norm)
-    uncertainties = denormalize_std(uncertainties_norm)
+    uncertainties = denormalize_std(uncertainties_norm, predictions_norm)
 
     print(f"\nPrediction statistics:")
     print(f"  Mean AGB: {predictions.mean():.2f} Mg/ha")

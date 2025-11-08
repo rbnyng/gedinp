@@ -16,10 +16,11 @@ from data.dataset import GEDINeuralProcessDataset, collate_neural_process
 from data.spatial_cv import SpatialTileSplitter
 from models.neural_process import (
     GEDINeuralProcess,
-    neural_process_loss,
-    compute_metrics
+    neural_process_loss
 )
 from diagnostics import generate_all_diagnostics
+from utils.metrics import compute_metrics
+from utils.general import set_seed
 
 
 def parse_args():
@@ -110,13 +111,6 @@ def parse_args():
                         help='Number of data loading workers')
 
     return parser.parse_args()
-
-
-def set_seed(seed):
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
 
 
 def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):

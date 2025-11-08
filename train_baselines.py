@@ -12,6 +12,8 @@ from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.spatial_cv import SpatialTileSplitter
 from baselines import RandomForestBaseline, XGBoostBaseline, IDWBaseline
+from utils.transforms import normalize_coords, denormalize_agbd
+from utils.metrics import compute_metrics
 
 
 def parse_args():
@@ -86,40 +88,6 @@ def prepare_data(df, log_transform=True, agbd_scale=200.0):
         agbd = agbd / agbd_scale
 
     return coords, embeddings, agbd
-
-
-def normalize_coordinates(coords, bounds):
-    lon_min, lat_min, lon_max, lat_max = bounds
-    lon_range = lon_max - lon_min if lon_max > lon_min else 1.0
-    lat_range = lat_max - lat_min if lat_max > lat_min else 1.0
-
-    normalized = coords.copy()
-    normalized[:, 0] = (coords[:, 0] - lon_min) / lon_range
-    normalized[:, 1] = (coords[:, 1] - lat_min) / lat_range
-
-    return normalized
-
-
-def denormalize_agbd(agbd_norm, log_transform=True, agbd_scale=200.0):
-    if log_transform:
-        return np.expm1(agbd_norm * np.log1p(agbd_scale))
-    else:
-        return agbd_norm * agbd_scale
-
-
-def compute_metrics(pred, true):
-    # RMSE
-    rmse = np.sqrt(np.mean((pred - true) ** 2))
-
-    # MAE
-    mae = np.mean(np.abs(pred - true))
-
-    # R²
-    ss_res = np.sum((true - pred) ** 2)
-    ss_tot = np.sum((true - np.mean(true)) ** 2)
-    r2 = 1 - (ss_res / (ss_tot + 1e-8))
-
-    return {'rmse': rmse, 'mae': mae, 'r2': r2}
 
 
 def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_transform=True):
@@ -297,9 +265,9 @@ def main():
         test_df, log_transform=args.log_transform_agbd, agbd_scale=agbd_scale
     )
 
-    train_coords = normalize_coordinates(train_coords, global_bounds)
-    val_coords = normalize_coordinates(val_coords, global_bounds)
-    test_coords = normalize_coordinates(test_coords, global_bounds)
+    train_coords = normalize_coords(train_coords, global_bounds)
+    val_coords = normalize_coords(val_coords, global_bounds)
+    test_coords = normalize_coords(test_coords, global_bounds)
 
     train_agbd = train_df['agbd'].values
     val_agbd = val_df['agbd'].values

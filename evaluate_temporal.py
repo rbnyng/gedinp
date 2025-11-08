@@ -14,26 +14,12 @@ import seaborn as sns
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from models.neural_process import GEDINeuralProcess, compute_metrics
+from models.neural_process import GEDINeuralProcess
+from utils.metrics import compute_metrics
+from utils.plotting import plot_results
+from utils.general import convert_to_serializable
 
-def convert_to_serializable(obj):
-    if isinstance(obj, dict):
-        return {key: convert_to_serializable(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_to_serializable(item) for item in obj]
-    elif isinstance(obj, tuple):
-        return tuple(convert_to_serializable(item) for item in obj)
-    elif isinstance(obj, (np.integer, np.int32, np.int64)):
-        return int(obj)
-    elif isinstance(obj, (np.floating, np.float32, np.float64)):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, np.bool_):
-        return bool(obj)
-    else:
-        return obj
-        
+
 def evaluate_model(model, dataloader, device):
     """Evaluate model on a dataset."""
     model.eval()
@@ -96,87 +82,6 @@ def evaluate_model(model, dataloader, device):
             avg_metrics[key] = np.mean([m[key] for m in all_metrics])
 
     return predictions, targets, uncertainties, avg_metrics
-
-
-def plot_results(predictions, targets, uncertainties, output_dir, dataset_name='temporal'):
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle(f'Temporal Validation: {dataset_name}', fontsize=16, fontweight='bold')
-
-    ax = axes[0, 0]
-    ax.scatter(targets, predictions, alpha=0.3, s=10)
-    min_val = min(targets.min(), predictions.min())
-    max_val = max(targets.max(), predictions.max())
-    ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect prediction')
-    ax.set_xlabel('True AGBD', fontweight='bold')
-    ax.set_ylabel('Predicted AGBD', fontweight='bold')
-    ax.set_title('Predictions vs Truth')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ss_res = ((targets - predictions) ** 2).sum()
-    ss_tot = ((targets - targets.mean()) ** 2).sum()
-    r2 = 1 - ss_res / (ss_tot + 1e-8)
-    ax.text(0.05, 0.95, f'R² = {r2:.4f}', transform=ax.transAxes,
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    ax = axes[0, 1]
-    residuals = predictions - targets
-    ax.scatter(predictions, residuals, alpha=0.3, s=10)
-    ax.axhline(y=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('Predicted AGBD', fontweight='bold')
-    ax.set_ylabel('Residual (Pred - True)', fontweight='bold')
-    ax.set_title('Residual Plot')
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[1, 0]
-    ax.hist(residuals, bins=50, edgecolor='black', alpha=0.7)
-    ax.axvline(x=0, color='r', linestyle='--', linewidth=2)
-    ax.set_xlabel('Residual', fontweight='bold')
-    ax.set_ylabel('Frequency', fontweight='bold')
-    ax.set_title('Distribution of Residuals')
-    ax.grid(True, alpha=0.3, axis='y')
-
-    rmse = np.sqrt(np.mean(residuals ** 2))
-    mae = np.mean(np.abs(residuals))
-    ax.text(0.05, 0.95, f'RMSE = {rmse:.4f}\nMAE = {mae:.4f}',
-            transform=ax.transAxes, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    ax = axes[1, 1]
-    if uncertainties is not None and uncertainties.std() > 0:
-        sorted_indices = np.argsort(uncertainties)
-        sorted_uncertainties = uncertainties[sorted_indices]
-        sorted_errors = np.abs(residuals[sorted_indices])
-
-        n_bins = 20
-        bin_size = len(sorted_uncertainties) // n_bins
-        bin_uncertainties = []
-        bin_errors = []
-
-        for i in range(n_bins):
-            start_idx = i * bin_size
-            end_idx = (i + 1) * bin_size if i < n_bins - 1 else len(sorted_uncertainties)
-            bin_uncertainties.append(sorted_uncertainties[start_idx:end_idx].mean())
-            bin_errors.append(sorted_errors[start_idx:end_idx].mean())
-
-        ax.scatter(bin_uncertainties, bin_errors, s=50)
-        min_val = min(min(bin_uncertainties), min(bin_errors))
-        max_val = max(max(bin_uncertainties), max(bin_errors))
-        ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect calibration')
-        ax.set_xlabel('Predicted Uncertainty (σ)', fontweight='bold')
-        ax.set_ylabel('Actual Error (|pred - true|)', fontweight='bold')
-        ax.set_title('Uncertainty Calibration')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    else:
-        ax.text(0.5, 0.5, 'No uncertainty predictions', ha='center', va='center',
-                transform=ax.transAxes)
-        ax.set_title('Uncertainty Calibration')
-
-    plt.tight_layout()
-    plt.savefig(output_dir / f'temporal_eval_{dataset_name}.png', dpi=300, bbox_inches='tight')
-    print(f"Saved evaluation plot to: {output_dir / f'temporal_eval_{dataset_name}.png'}")
 
 
 def main():
@@ -386,7 +291,11 @@ def main():
     print(f"Saved predictions to: {predictions_path}")
 
     years_label = '_'.join(map(str, args.test_years))
-    plot_results(predictions, targets, uncertainties, model_dir, years_label)
+    plot_results(
+        predictions, targets, uncertainties, model_dir, years_label,
+        title=f'Temporal Validation: {years_label}',
+        filename_prefix='temporal_eval'
+    )
 
     print("\n" + "=" * 80)
     print("TEMPORAL VALIDATION COMPLETE")
