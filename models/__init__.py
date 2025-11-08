@@ -3,7 +3,6 @@
 from .neural_process import (
     GEDINeuralProcess,
     neural_process_loss,
-    compute_metrics,
     EmbeddingEncoder,
     ContextEncoder,
     Decoder
@@ -12,7 +11,6 @@ from .neural_process import (
 __all__ = [
     'GEDINeuralProcess',
     'neural_process_loss',
-    'compute_metrics',
     'EmbeddingEncoder',
     'ContextEncoder',
     'Decoder'
