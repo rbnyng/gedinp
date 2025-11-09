@@ -274,14 +274,14 @@ def main():
     # Data arguments
     parser.add_argument('--region_bbox', type=float, nargs=4, required=True,
                         help='Region bounding box: min_lon min_lat max_lon max_lat')
-    parser.add_argument('--start_time', type=str, default='2019-01-01')
-    parser.add_argument('--end_time', type=str, default='2023-12-31')
-    parser.add_argument('--embedding_year', type=int, default=2024)
+    parser.add_argument('--start_time', type=str, default='2022-01-01')
+    parser.add_argument('--end_time', type=str, default='2022-12-31')
+    parser.add_argument('--embedding_year', type=int, default=2022)
     parser.add_argument('--cache_dir', type=str, default='./cache')
 
     # Training arguments
     parser.add_argument('--hidden_dim', type=int, default=512)
-    parser.add_argument('--latent_dim', type=int, default=128)
+    parser.add_argument('--latent_dim', type=int, default=256)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--lr', type=float, default=5e-4)
