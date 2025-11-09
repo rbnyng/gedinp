@@ -61,6 +61,8 @@ def parse_args():
                         help='Validation set ratio')
     parser.add_argument('--test_ratio', type=float, default=0.15,
                         help='Test set ratio')
+    parser.add_argument('--agbd_scale', type=float, default=200.0,
+                        help='AGBD scale factor for normalization (default: 200.0 Mg/ha)')
     parser.add_argument('--log_transform_agbd', action='store_true', default=True,
                         help='Apply log transform to AGBD')
 
@@ -249,16 +251,15 @@ def main():
     save_config(config, output_dir / 'config.json')
 
     print("Step 4: Preparing data for baseline models...")
-    agbd_scale = 200.0
 
     train_coords, train_embeddings, train_agbd_norm = prepare_data(
-        train_df, log_transform=args.log_transform_agbd, agbd_scale=agbd_scale
+        train_df, log_transform=args.log_transform_agbd, agbd_scale=args.agbd_scale
     )
     val_coords, val_embeddings, val_agbd_norm = prepare_data(
-        val_df, log_transform=args.log_transform_agbd, agbd_scale=agbd_scale
+        val_df, log_transform=args.log_transform_agbd, agbd_scale=args.agbd_scale
     )
     test_coords, test_embeddings, test_agbd_norm = prepare_data(
-        test_df, log_transform=args.log_transform_agbd, agbd_scale=agbd_scale
+        test_df, log_transform=args.log_transform_agbd, agbd_scale=args.agbd_scale
     )
 
     train_coords = normalize_coords(train_coords, global_bounds)
@@ -284,13 +285,13 @@ def main():
 
         print("Evaluating on validation set...")
         val_metrics, val_pred, _ = evaluate_model(
-            model_rf, val_coords, val_embeddings, val_agbd, agbd_scale, args.log_transform_agbd
+            model_rf, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
 
         print("Evaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
-            model_rf, test_coords, test_embeddings, test_agbd, agbd_scale, args.log_transform_agbd
+            model_rf, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
 
@@ -310,13 +311,13 @@ def main():
 
         print("Evaluating on validation set...")
         val_metrics, val_pred, _ = evaluate_model(
-            model_xgb, val_coords, val_embeddings, val_agbd, agbd_scale, args.log_transform_agbd
+            model_xgb, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
 
         print("Evaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
-            model_xgb, test_coords, test_embeddings, test_agbd, agbd_scale, args.log_transform_agbd
+            model_xgb, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
 
@@ -336,13 +337,13 @@ def main():
 
         print("Evaluating on validation set...")
         val_metrics, val_pred, _ = evaluate_model(
-            model_idw, val_coords, val_embeddings, val_agbd, agbd_scale, args.log_transform_agbd
+            model_idw, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
 
         print("Evaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
-            model_idw, test_coords, test_embeddings, test_agbd, agbd_scale, args.log_transform_agbd
+            model_idw, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
 
