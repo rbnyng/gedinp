@@ -21,6 +21,9 @@ try:
 except ImportError:
     neural_process_loss = None
 
+# Import denormalization utilities
+from utils.normalization import denormalize_agbd, denormalize_std
+
 
 def compute_metrics(
     pred: Union[np.ndarray, torch.Tensor],
@@ -84,7 +87,10 @@ def evaluate_model(
     max_context_shots: int = 20000,
     max_targets_per_chunk: int = 1000,
     compute_loss: bool = False,
-    kl_weight: float = 1.0
+    kl_weight: float = 1.0,
+    agbd_scale: float = 200.0,
+    log_transform_agbd: bool = True,
+    denormalize_for_reporting: bool = False
 ) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float]],
            Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float], Dict[str, float]]]:
     """
@@ -98,6 +104,10 @@ def evaluate_model(
         max_targets_per_chunk: Maximum targets to process at once
         compute_loss: If True, also compute and return loss components
         kl_weight: KL weight for loss computation (only used if compute_loss=True)
+        agbd_scale: AGBD scale factor for denormalization (default: 200.0)
+        log_transform_agbd: Whether log transform was used (default: True)
+        denormalize_for_reporting: If True, denormalize to linear space for final reporting.
+            If False (default), keep in log space for model selection during training.
 
     Returns:
         If compute_loss=False:
@@ -105,6 +115,16 @@ def evaluate_model(
         If compute_loss=True:
             Tuple of (predictions, targets, uncertainties, metrics, loss_dict)
             where loss_dict contains {'loss', 'nll', 'kl'}
+
+        When denormalize_for_reporting=False (default):
+            - predictions, targets, uncertainties are in normalized log space
+            - metrics (RMSE, MAE, R²) are in log space (aligned with training objective)
+            - Use this for model selection during training
+
+        When denormalize_for_reporting=True:
+            - predictions, targets, uncertainties are in raw Mg/ha (denormalized)
+            - metrics (RMSE, MAE, R²) are in linear space
+            - Use this for final test reporting and comparison with baselines
     """
     model.eval()
     all_predictions = []
@@ -235,9 +255,22 @@ def evaluate_model(
     targets = np.array(all_targets)
     uncertainties = np.array(all_uncertainties)
 
-    # Compute metrics on all predictions (not averaged per-tile!)
+    # Conditionally denormalize based on use case
+    if denormalize_for_reporting:
+        # For final test reporting: denormalize to raw Mg/ha for comparison with baselines
+        predictions_out = denormalize_agbd(predictions, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
+        targets_out = denormalize_agbd(targets, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
+        uncertainties_out = denormalize_std(uncertainties, predictions, agbd_scale=agbd_scale)
+    else:
+        # For training validation: keep in log space for model selection
+        # This aligns metric computation with the training objective
+        predictions_out = predictions
+        targets_out = targets
+        uncertainties_out = uncertainties
+
+    # Compute metrics (space depends on denormalize_for_reporting flag)
     # R² and other metrics must be computed globally, not averaged across tiles
-    final_metrics = compute_metrics(predictions, targets, uncertainties)
+    final_metrics = compute_metrics(predictions_out, targets_out, uncertainties_out)
 
     if compute_loss:
         # Compute average loss components
@@ -251,9 +284,9 @@ def evaluate_model(
             'kl': avg_kl
         }
 
-        return predictions, targets, uncertainties, final_metrics, loss_dict
+        return predictions_out, targets_out, uncertainties_out, final_metrics, loss_dict
     else:
-        return predictions, targets, uncertainties, final_metrics
+        return predictions_out, targets_out, uncertainties_out, final_metrics
 
 
 def plot_results(
@@ -273,9 +306,9 @@ def plot_results(
     4. Uncertainty calibration plot
 
     Args:
-        predictions: Predicted values
-        targets: True values
-        uncertainties: Predicted uncertainties (can be None)
+        predictions: Predicted values in raw Mg/ha (denormalized)
+        targets: True values in raw Mg/ha (denormalized)
+        uncertainties: Predicted uncertainties in raw Mg/ha (can be None)
         output_dir: Directory to save plots
         dataset_name: Name of dataset for plot title (default: 'test')
     """
