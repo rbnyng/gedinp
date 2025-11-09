@@ -28,6 +28,7 @@ def run_training(base_args, architecture_mode, output_subdir):
         '--epochs', str(base_args['epochs']),
         '--batch_size', str(base_args['batch_size']),
         '--lr', str(base_args['lr']),
+        '--weight_decay', str(base_args['weight_decay']),
         '--output_dir', str(output_subdir),
         '--seed', str(base_args['seed']),
         '--kl_weight_max', str(base_args['kl_weight_max']),
@@ -285,6 +286,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--lr', type=float, default=5e-4)
+    parser.add_argument('--weight_decay', type=float, default=0.01)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--kl_weight_max', type=float, default=1.0)
     parser.add_argument('--kl_warmup_epochs', type=int, default=10)
@@ -324,6 +326,7 @@ def main():
         'epochs': args.epochs,
         'batch_size': args.batch_size,
         'lr': args.lr,
+        'weight_decay': args.weight_decay,
         'seed': args.seed,
         'kl_weight_max': args.kl_weight_max,
         'kl_warmup_epochs': args.kl_warmup_epochs

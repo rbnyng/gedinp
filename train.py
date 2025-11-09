@@ -65,6 +65,8 @@ def parse_args():
                         help='Batch size (number of tiles)')
     parser.add_argument('--lr', type=float, default=5e-4,
                         help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.01,
+                        help='Weight decay (L2 regularization) for AdamW optimizer')
     parser.add_argument('--epochs', type=int, default=100,
                         help='Number of epochs')
     parser.add_argument('--val_ratio', type=float, default=0.15,
@@ -398,7 +400,8 @@ def main():
     print(f"Model parameters: {n_params:,}")
     print()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    print(f"Optimizer: AdamW (lr={args.lr}, weight_decay={args.weight_decay})")
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
