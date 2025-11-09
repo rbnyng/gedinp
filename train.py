@@ -85,6 +85,8 @@ def parse_args():
                         help='Number of epochs to warm up KL weight from 0 to max')
 
     # Dataset arguments
+    parser.add_argument('--agbd_scale', type=float, default=200.0,
+                        help='AGBD scale factor for normalization (default: 200.0 Mg/ha)')
     parser.add_argument('--log_transform_agbd', action='store_true', default=True,
                         help='Apply log transform to AGBD')
     parser.add_argument('--augment_coords', action='store_true', default=True,
@@ -383,6 +385,7 @@ def main():
     train_dataset = GEDINeuralProcessDataset(
         train_df,
         min_shots_per_tile=args.min_shots_per_tile,
+        agbd_scale=args.agbd_scale,
         log_transform_agbd=args.log_transform_agbd,
         augment_coords=args.augment_coords,
         coord_noise_std=args.coord_noise_std,
@@ -391,6 +394,7 @@ def main():
     val_dataset = GEDINeuralProcessDataset(
         val_df,
         min_shots_per_tile=args.min_shots_per_tile,
+        agbd_scale=args.agbd_scale,
         log_transform_agbd=args.log_transform_agbd,
         augment_coords=False,
         coord_noise_std=0.0,

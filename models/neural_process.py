@@ -4,6 +4,20 @@ import torch.nn.functional as F
 from typing import Tuple, Optional
 
 
+# Numerical stability constraints for variance and standard deviation predictions
+# These values prevent numerical instability (overflow/underflow) during training
+
+# Log-variance bounds (used in Decoder)
+# log_var represents log(variance), so variance = exp(log_var)
+LOG_VAR_MIN = -7.0  # Corresponds to variance ≈ 0.0009 (exp(-7))
+LOG_VAR_MAX = 5.0   # Corresponds to variance ≈ 148.4 (exp(5))
+
+# Log-sigma bounds (used in LatentEncoder)
+# log_sigma represents log(std), so std = exp(log_sigma)
+LOG_SIGMA_MIN = -10.0  # Corresponds to std ≈ 0.000045 (exp(-10))
+LOG_SIGMA_MAX = 2.0    # Corresponds to std ≈ 7.4 (exp(2))
+
+
 class EmbeddingEncoder(nn.Module):
     """Encode GeoTessera embedding patches into feature vectors."""
 
@@ -219,8 +233,7 @@ class Decoder(nn.Module):
         if self.output_uncertainty:
             log_var = self.log_var_head(x)
             # Clamp log_var to prevent numerical instability
-            # Range: variance between ~0.001 and ~150
-            log_var = torch.clamp(log_var, min=-7, max=5)
+            log_var = torch.clamp(log_var, min=LOG_VAR_MIN, max=LOG_VAR_MAX)
             return mean, log_var
         else:
             return mean, None
@@ -338,7 +351,7 @@ class LatentEncoder(nn.Module):
         log_sigma = self.log_sigma_head(x)
 
         # Clamp log_sigma for numerical stability
-        log_sigma = torch.clamp(log_sigma, min=-10, max=2)
+        log_sigma = torch.clamp(log_sigma, min=LOG_SIGMA_MIN, max=LOG_SIGMA_MAX)
 
         return mu, log_sigma
 
