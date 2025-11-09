@@ -44,7 +44,7 @@ def run_training(base_args, architecture_mode, output_subdir):
         config = load_config(output_subdir / 'config.json')
 
         checkpoint = torch.load(output_subdir / 'best_r2_model.pt',
-                               map_location='cpu')
+                               map_location='cpu', weights_only=False)
 
         return {
             'architecture': architecture_mode,
