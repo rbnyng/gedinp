@@ -199,7 +199,9 @@ def validate(model, dataloader, device, kl_weight=1.0):
     total_loss = 0
     total_nll = 0
     total_kl = 0
-    all_metrics = []
+    all_predictions = []
+    all_targets = []
+    all_uncertainties = []
     n_tiles = 0
 
     with torch.no_grad():
@@ -247,9 +249,15 @@ def validate(model, dataloader, device, kl_weight=1.0):
                 batch_kl += loss_dict['kl']
                 n_tiles_in_batch += 1
 
-                pred_std = torch.exp(0.5 * pred_log_var) if pred_log_var is not None else None
-                metrics = compute_metrics(pred_mean, target_agbd, pred_std)
-                all_metrics.append(metrics)
+                # Collect predictions and targets for global metric computation
+                all_predictions.extend(pred_mean.detach().cpu().numpy().flatten())
+                all_targets.extend(target_agbd.detach().cpu().numpy().flatten())
+
+                if pred_log_var is not None:
+                    pred_std = torch.exp(0.5 * pred_log_var)
+                    all_uncertainties.extend(pred_std.detach().cpu().numpy().flatten())
+                else:
+                    all_uncertainties.extend(np.zeros_like(pred_mean.detach().cpu().numpy().flatten()))
 
             if n_tiles_in_batch > 0:
                 batch_loss = batch_loss / n_tiles_in_batch
@@ -262,12 +270,16 @@ def validate(model, dataloader, device, kl_weight=1.0):
     avg_nll = total_nll / max(n_tiles, 1)
     avg_kl = total_kl / max(n_tiles, 1)
 
-    avg_metrics = {}
-    if len(all_metrics) > 0:
-        for key in all_metrics[0].keys():
-            avg_metrics[key] = np.mean([m[key] for m in all_metrics])
+    # Compute metrics globally (not averaged per-tile!)
+    # R² and other metrics must be computed on all predictions at once
+    global_metrics = {}
+    if len(all_predictions) > 0:
+        predictions = np.array(all_predictions)
+        targets = np.array(all_targets)
+        uncertainties = np.array(all_uncertainties)
+        global_metrics = compute_metrics(predictions, targets, uncertainties)
 
-    return {'loss': avg_loss, 'nll': avg_nll, 'kl': avg_kl}, avg_metrics
+    return {'loss': avg_loss, 'nll': avg_nll, 'kl': avg_kl}, global_metrics
 
 
 def main():
