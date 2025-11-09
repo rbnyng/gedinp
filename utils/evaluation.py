@@ -95,7 +95,6 @@ def evaluate_model(
     all_predictions = []
     all_targets = []
     all_uncertainties = []
-    all_metrics = []
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc='Evaluating')):
@@ -170,10 +169,6 @@ def evaluate_model(
                 all_targets.extend(target_np)
                 all_uncertainties.extend(pred_std_np)
 
-                # Compute metrics for this tile
-                metrics = compute_metrics(pred_mean_np, target_np, pred_std_np)
-                all_metrics.append(metrics)
-
                 # Clear GPU cache after each tile
                 device_str = str(device) if not isinstance(device, str) else device
                 if 'cuda' in device_str:
@@ -184,13 +179,11 @@ def evaluate_model(
     targets = np.array(all_targets)
     uncertainties = np.array(all_uncertainties)
 
-    # Aggregate metrics
-    avg_metrics = {}
-    if len(all_metrics) > 0:
-        for key in all_metrics[0].keys():
-            avg_metrics[key] = np.mean([m[key] for m in all_metrics])
+    # Compute metrics on all predictions (not averaged per-tile!)
+    # R² and other metrics must be computed globally, not averaged across tiles
+    final_metrics = compute_metrics(predictions, targets, uncertainties)
 
-    return predictions, targets, uncertainties, avg_metrics
+    return predictions, targets, uncertainties, final_metrics
 
 
 def plot_results(
