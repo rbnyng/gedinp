@@ -13,6 +13,7 @@ from typing import Optional, Union, List
 import numpy as np
 import tiledb
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -27,7 +28,8 @@ class GEDIQuerier:
         s3_bucket: str = "dog.gedidb.gedi-l2-l4-v002",
         url: str = "https://s3.gfz-potsdam.de",
         local_path: Optional[str] = None,
-        memory_budget_mb: int = 512
+        memory_budget_mb: int = 512,
+        max_workers: int = 8
     ):
         """
         Initialize GEDI data provider.
@@ -38,6 +40,7 @@ class GEDIQuerier:
             url: S3 endpoint URL
             local_path: Path to local gediDB if storage_type='local'
             memory_budget_mb: TileDB memory budget in MB (default: 512)
+            max_workers: Maximum number of parallel workers for tile/chunk queries (default: 8)
         """
         # Configure TileDB memory limits to prevent huge allocations
         memory_budget_bytes = memory_budget_mb * 1024 * 1024
@@ -65,6 +68,7 @@ class GEDIQuerier:
         # Store config for later use
         self.tiledb_config = config
         self.memory_budget_mb = memory_budget_mb
+        self.max_workers = max_workers
 
         if storage_type == 's3':
             self.provider = gdb.GEDIProvider(
@@ -202,32 +206,54 @@ class GEDIQuerier:
 
         total_chunks = lon_chunks * lat_chunks
         logger.info(f"Splitting query into {total_chunks} chunks ({lon_chunks}x{lat_chunks})")
+        logger.info(f"Using {self.max_workers} parallel workers")
 
-        all_data = []
-        chunk_count = 0
-
+        # Build list of chunk bboxes
+        chunk_bboxes = []
         for i in range(lon_chunks):
             for j in range(lat_chunks):
                 chunk_min_lon = min_lon + i * chunk_size
                 chunk_max_lon = min(chunk_min_lon + chunk_size, max_lon)
                 chunk_min_lat = min_lat + j * chunk_size
                 chunk_max_lat = min(chunk_min_lat + chunk_size, max_lat)
-
                 chunk_bbox = (chunk_min_lon, chunk_min_lat, chunk_max_lon, chunk_max_lat)
-                chunk_count += 1
+                chunk_bboxes.append(chunk_bbox)
 
-                logger.info(f"Querying chunk {chunk_count}/{total_chunks}: {chunk_bbox}")
+        all_data = []
 
-                try:
-                    chunk_df = self.query_bbox(chunk_bbox, **kwargs)
-                    if len(chunk_df) > 0:
-                        all_data.append(chunk_df)
-                        logger.info(f"  Retrieved {len(chunk_df)} shots")
-                    else:
-                        logger.info(f"  No shots found")
-                except Exception as e:
-                    logger.warning(f"  Chunk failed: {e}")
+        def query_single_chunk(chunk_info):
+            """Helper function to query a single chunk."""
+            chunk_idx, chunk_bbox = chunk_info
+            try:
+                chunk_df = self.query_bbox(chunk_bbox, **kwargs)
+                return chunk_idx, chunk_df, None
+            except Exception as e:
+                return chunk_idx, None, e
+
+        # Execute queries in parallel
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all chunk queries
+            futures = {
+                executor.submit(query_single_chunk, (idx, bbox)): idx
+                for idx, bbox in enumerate(chunk_bboxes)
+            }
+
+            # Process results as they complete
+            for future in as_completed(futures):
+                chunk_idx, chunk_df, error = future.result()
+                chunk_bbox = chunk_bboxes[chunk_idx]
+
+                logger.info(f"Chunk {chunk_idx+1}/{total_chunks} ({chunk_bbox}): ", end="")
+
+                if error:
+                    logger.warning(f"Failed - {error}")
                     continue
+
+                if chunk_df is not None and len(chunk_df) > 0:
+                    all_data.append(chunk_df)
+                    logger.info(f"Retrieved {len(chunk_df)} shots")
+                else:
+                    logger.info(f"No shots found")
 
         if len(all_data) == 0:
             logger.warning("No data retrieved from any chunks")
@@ -315,18 +341,54 @@ class GEDIQuerier:
             tile_size
         )
 
-        all_shots = []
-
+        # Build list of tile centers
+        tile_centers = []
         for lon_center in lon_centers:
             for lat_center in lat_centers:
-                tile_df = self.query_tile(lon_center, lat_center, tile_size, **kwargs)
+                tile_centers.append((lon_center, lat_center))
 
+        total_tiles = len(tile_centers)
+        logger.info(f"Querying {total_tiles} tiles in parallel with {self.max_workers} workers")
+
+        all_shots = []
+
+        def query_single_tile(tile_info):
+            """Helper function to query a single tile."""
+            tile_idx, (lon_center, lat_center) = tile_info
+            try:
+                tile_df = self.query_tile(lon_center, lat_center, tile_size, **kwargs)
                 if len(tile_df) > 0:
                     # Add tile identifier
                     tile_df['tile_id'] = f"tile_{lon_center:.2f}_{lat_center:.2f}"
                     tile_df['tile_lon'] = lon_center
                     tile_df['tile_lat'] = lat_center
+                    return tile_idx, tile_df, None
+                return tile_idx, None, None
+            except Exception as e:
+                return tile_idx, None, e
+
+        # Execute queries in parallel
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all tile queries
+            futures = {
+                executor.submit(query_single_tile, (idx, center)): idx
+                for idx, center in enumerate(tile_centers)
+            }
+
+            # Process results as they complete
+            for future in as_completed(futures):
+                tile_idx, tile_df, error = future.result()
+                lon_center, lat_center = tile_centers[tile_idx]
+
+                if error:
+                    logger.warning(f"Tile {tile_idx+1}/{total_tiles} ({lon_center:.2f}, {lat_center:.2f}): Failed - {error}")
+                    continue
+
+                if tile_df is not None:
                     all_shots.append(tile_df)
+                    logger.info(f"Tile {tile_idx+1}/{total_tiles} ({lon_center:.2f}, {lat_center:.2f}): Retrieved {len(tile_df)} shots")
+                else:
+                    logger.debug(f"Tile {tile_idx+1}/{total_tiles} ({lon_center:.2f}, {lat_center:.2f}): No shots found")
 
         if len(all_shots) == 0:
             return pd.DataFrame()
