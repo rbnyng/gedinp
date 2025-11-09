@@ -49,6 +49,7 @@ def run_training(base_args, architecture_mode, output_subdir):
         return {
             'architecture': architecture_mode,
             'val_metrics': checkpoint.get('val_metrics', {}),
+            'test_metrics': checkpoint.get('test_metrics', {}),
             'epoch': checkpoint.get('epoch', -1),
             'r2': checkpoint.get('r2', float('-inf')),
             'output_dir': str(output_subdir)
@@ -65,9 +66,12 @@ def compare_results(results, output_dir):
             continue
         row = {
             'Architecture': res['architecture'],
-            'R²': res['r2'],
-            'RMSE': res['val_metrics'].get('rmse', np.nan),
-            'MAE': res['val_metrics'].get('mae', np.nan),
+            'Val R²': res['r2'],
+            'Val RMSE': res['val_metrics'].get('rmse', np.nan),
+            'Val MAE': res['val_metrics'].get('mae', np.nan),
+            'Test R²': res['test_metrics'].get('r2', np.nan),
+            'Test RMSE': res['test_metrics'].get('rmse', np.nan),
+            'Test MAE': res['test_metrics'].get('mae', np.nan),
             'Epochs': res['epoch'],
             'Mean Uncertainty': res['val_metrics'].get('mean_uncertainty', np.nan)
         }
@@ -75,8 +79,8 @@ def compare_results(results, output_dir):
 
     df = pd.DataFrame(rows)
 
-    # Sort by R² (descending)
-    df = df.sort_values('R²', ascending=False)
+    # Sort by Test R² (descending) - use test performance as primary metric
+    df = df.sort_values('Test R²', ascending=False)
 
     df.to_csv(output_dir / 'ablation_results.csv', index=False)
 
@@ -86,37 +90,75 @@ def compare_results(results, output_dir):
     print(df.to_string(index=False))
     print("=" * 80)
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle('Architecture Ablation Study', fontsize=16, fontweight='bold')
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig.suptitle('Architecture Ablation Study - Validation vs Test Performance', fontsize=16, fontweight='bold')
 
     # R² comparison
     ax = axes[0, 0]
-    colors = sns.color_palette("husl", len(df))
-    ax.bar(df['Architecture'], df['R²'], color=colors)
+    x = np.arange(len(df))
+    width = 0.35
+    ax.bar(x - width/2, df['Val R²'], width, label='Validation', alpha=0.8)
+    ax.bar(x + width/2, df['Test R²'], width, label='Test', alpha=0.8)
     ax.set_ylabel('R² Score', fontweight='bold')
     ax.set_title('R² Score by Architecture')
+    ax.set_xticks(x)
+    ax.set_xticklabels(df['Architecture'])
     ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+    ax.legend()
     ax.grid(True, alpha=0.3)
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
     # RMSE comparison
     ax = axes[0, 1]
-    ax.bar(df['Architecture'], df['RMSE'], color=colors)
+    ax.bar(x - width/2, df['Val RMSE'], width, label='Validation', alpha=0.8)
+    ax.bar(x + width/2, df['Test RMSE'], width, label='Test', alpha=0.8)
     ax.set_ylabel('RMSE', fontweight='bold')
     ax.set_title('RMSE by Architecture')
+    ax.set_xticks(x)
+    ax.set_xticklabels(df['Architecture'])
+    ax.legend()
     ax.grid(True, alpha=0.3)
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
     # MAE comparison
-    ax = axes[1, 0]
-    ax.bar(df['Architecture'], df['MAE'], color=colors)
+    ax = axes[0, 2]
+    ax.bar(x - width/2, df['Val MAE'], width, label='Validation', alpha=0.8)
+    ax.bar(x + width/2, df['Test MAE'], width, label='Test', alpha=0.8)
     ax.set_ylabel('MAE', fontweight='bold')
     ax.set_title('MAE by Architecture')
+    ax.set_xticks(x)
+    ax.set_xticklabels(df['Architecture'])
+    ax.legend()
     ax.grid(True, alpha=0.3)
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-    # Uncertainty comparison
+    # Test R² only (for clarity)
+    ax = axes[1, 0]
+    colors = sns.color_palette("husl", len(df))
+    ax.bar(df['Architecture'], df['Test R²'], color=colors)
+    ax.set_ylabel('Test R² Score', fontweight='bold')
+    ax.set_title('Test R² Score (Primary Metric)')
+    ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+    ax.grid(True, alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # Validation vs Test R² scatter
     ax = axes[1, 1]
+    ax.scatter(df['Val R²'], df['Test R²'], s=100, alpha=0.6, c=colors)
+    for i, arch in enumerate(df['Architecture']):
+        ax.annotate(arch, (df['Val R²'].iloc[i], df['Test R²'].iloc[i]),
+                   fontsize=8, ha='right', va='bottom')
+    lims = [min(df['Val R²'].min(), df['Test R²'].min()) - 0.05,
+            max(df['Val R²'].max(), df['Test R²'].max()) + 0.05]
+    ax.plot(lims, lims, 'k--', alpha=0.5, label='Val = Test')
+    ax.set_xlabel('Validation R²', fontweight='bold')
+    ax.set_ylabel('Test R²', fontweight='bold')
+    ax.set_title('Validation vs Test R²')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Uncertainty comparison
+    ax = axes[1, 2]
     ax.bar(df['Architecture'], df['Mean Uncertainty'], color=colors)
     ax.set_ylabel('Mean Predicted Uncertainty', fontweight='bold')
     ax.set_title('Predicted Uncertainty by Architecture')
@@ -180,17 +222,22 @@ def compare_results(results, output_dir):
 
         best = df.iloc[0]
         f.write("-" * 80 + "\n")
-        f.write("BEST ARCHITECTURE\n")
+        f.write("BEST ARCHITECTURE (by Test R²)\n")
         f.write("-" * 80 + "\n")
-        f.write(f"Architecture: {best['Architecture']}\n")
-        f.write(f"R² Score: {best['R²']:.4f}\n")
-        f.write(f"RMSE: {best['RMSE']:.4f}\n")
-        f.write(f"MAE: {best['MAE']:.4f}\n\n")
+        f.write(f"Architecture: {best['Architecture']}\n\n")
+        f.write(f"Validation Performance:\n")
+        f.write(f"  R² Score: {best['Val R²']:.4f}\n")
+        f.write(f"  RMSE: {best['Val RMSE']:.4f}\n")
+        f.write(f"  MAE: {best['Val MAE']:.4f}\n\n")
+        f.write(f"Test Performance:\n")
+        f.write(f"  R² Score: {best['Test R²']:.4f}\n")
+        f.write(f"  RMSE: {best['Test RMSE']:.4f}\n")
+        f.write(f"  MAE: {best['Test MAE']:.4f}\n\n")
 
-        cnp_r2 = df[df['Architecture'] == 'cnp']['R²'].values[0] if 'cnp' in df['Architecture'].values else None
-        det_r2 = df[df['Architecture'] == 'deterministic']['R²'].values[0] if 'deterministic' in df['Architecture'].values else None
-        lat_r2 = df[df['Architecture'] == 'latent']['R²'].values[0] if 'latent' in df['Architecture'].values else None
-        anp_r2 = df[df['Architecture'] == 'anp']['R²'].values[0] if 'anp' in df['Architecture'].values else None
+        cnp_r2 = df[df['Architecture'] == 'cnp']['Test R²'].values[0] if 'cnp' in df['Architecture'].values else None
+        det_r2 = df[df['Architecture'] == 'deterministic']['Test R²'].values[0] if 'deterministic' in df['Architecture'].values else None
+        lat_r2 = df[df['Architecture'] == 'latent']['Test R²'].values[0] if 'latent' in df['Architecture'].values else None
+        anp_r2 = df[df['Architecture'] == 'anp']['Test R²'].values[0] if 'anp' in df['Architecture'].values else None
 
         if cnp_r2 and det_r2:
             improvement = ((det_r2 - cnp_r2) / abs(cnp_r2)) * 100
