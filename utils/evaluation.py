@@ -89,7 +89,8 @@ def evaluate_model(
     compute_loss: bool = False,
     kl_weight: float = 1.0,
     agbd_scale: float = 200.0,
-    log_transform_agbd: bool = True
+    log_transform_agbd: bool = True,
+    denormalize_for_reporting: bool = False
 ) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float]],
            Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float], Dict[str, float]]]:
     """
@@ -105,15 +106,25 @@ def evaluate_model(
         kl_weight: KL weight for loss computation (only used if compute_loss=True)
         agbd_scale: AGBD scale factor for denormalization (default: 200.0)
         log_transform_agbd: Whether log transform was used (default: True)
+        denormalize_for_reporting: If True, denormalize to linear space for final reporting.
+            If False (default), keep in log space for model selection during training.
 
     Returns:
         If compute_loss=False:
             Tuple of (predictions, targets, uncertainties, metrics)
-            - predictions, targets, uncertainties are in raw Mg/ha (denormalized)
-            - metrics are computed in raw Mg/ha
         If compute_loss=True:
             Tuple of (predictions, targets, uncertainties, metrics, loss_dict)
             where loss_dict contains {'loss', 'nll', 'kl'}
+
+        When denormalize_for_reporting=False (default):
+            - predictions, targets, uncertainties are in normalized log space
+            - metrics (RMSE, MAE, R²) are in log space (aligned with training objective)
+            - Use this for model selection during training
+
+        When denormalize_for_reporting=True:
+            - predictions, targets, uncertainties are in raw Mg/ha (denormalized)
+            - metrics (RMSE, MAE, R²) are in linear space
+            - Use this for final test reporting and comparison with baselines
     """
     model.eval()
     all_predictions = []
@@ -244,15 +255,22 @@ def evaluate_model(
     targets = np.array(all_targets)
     uncertainties = np.array(all_uncertainties)
 
-    # Denormalize predictions, targets, and uncertainties to raw Mg/ha
-    # This ensures metrics (RMSE, MAE, R²) are computed in the same space as baselines
-    predictions_denorm = denormalize_agbd(predictions, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
-    targets_denorm = denormalize_agbd(targets, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
-    uncertainties_denorm = denormalize_std(uncertainties, predictions, agbd_scale=agbd_scale)
+    # Conditionally denormalize based on use case
+    if denormalize_for_reporting:
+        # For final test reporting: denormalize to raw Mg/ha for comparison with baselines
+        predictions_out = denormalize_agbd(predictions, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
+        targets_out = denormalize_agbd(targets, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
+        uncertainties_out = denormalize_std(uncertainties, predictions, agbd_scale=agbd_scale)
+    else:
+        # For training validation: keep in log space for model selection
+        # This aligns metric computation with the training objective
+        predictions_out = predictions
+        targets_out = targets
+        uncertainties_out = uncertainties
 
-    # Compute metrics on denormalized values (raw Mg/ha)
+    # Compute metrics (space depends on denormalize_for_reporting flag)
     # R² and other metrics must be computed globally, not averaged across tiles
-    final_metrics = compute_metrics(predictions_denorm, targets_denorm, uncertainties_denorm)
+    final_metrics = compute_metrics(predictions_out, targets_out, uncertainties_out)
 
     if compute_loss:
         # Compute average loss components
@@ -266,11 +284,9 @@ def evaluate_model(
             'kl': avg_kl
         }
 
-        # Return denormalized values (raw Mg/ha) for interpretability
-        return predictions_denorm, targets_denorm, uncertainties_denorm, final_metrics, loss_dict
+        return predictions_out, targets_out, uncertainties_out, final_metrics, loss_dict
     else:
-        # Return denormalized values (raw Mg/ha) for interpretability
-        return predictions_denorm, targets_denorm, uncertainties_denorm, final_metrics
+        return predictions_out, targets_out, uncertainties_out, final_metrics
 
 
 def plot_results(

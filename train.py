@@ -196,14 +196,17 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
     }
 
 
-def validate(model, dataloader, device, kl_weight=1.0, agbd_scale=200.0, log_transform_agbd=True):
+def validate(model, dataloader, device, kl_weight=1.0, agbd_scale=200.0, log_transform_agbd=True, denormalize_for_reporting=False):
     """
     Validate model using the shared evaluate_model utility.
 
     This ensures consistent metric computation (global, not per-tile averaged)
     across training validation and final evaluation.
 
-    Metrics are computed in raw Mg/ha (denormalized) for direct comparison with baselines.
+    Args:
+        denormalize_for_reporting: If False (default), compute metrics in log space
+            for model selection during training. If True, denormalize to linear space
+            for final test reporting and comparison with baselines.
     """
     from utils.evaluation import evaluate_model
 
@@ -217,7 +220,8 @@ def validate(model, dataloader, device, kl_weight=1.0, agbd_scale=200.0, log_tra
         compute_loss=True,
         kl_weight=kl_weight,
         agbd_scale=agbd_scale,
-        log_transform_agbd=log_transform_agbd
+        log_transform_agbd=log_transform_agbd,
+        denormalize_for_reporting=denormalize_for_reporting
     )
 
     return loss_dict, metrics
@@ -435,20 +439,21 @@ def main():
         train_metrics = train_epoch(model, train_loader, optimizer, args.device, kl_weight)
         train_losses.append(train_metrics['loss'])
 
-        # Validate
+        # Validate (metrics in log space for model selection aligned with training objective)
         val_losses_dict, val_metrics = validate(
             model, val_loader, args.device, kl_weight,
             agbd_scale=args.agbd_scale,
-            log_transform_agbd=args.log_transform_agbd
+            log_transform_agbd=args.log_transform_agbd,
+            denormalize_for_reporting=False  # Keep in log space for model selection
         )
         val_losses.append(val_losses_dict['loss'])
 
         print(f"Train Loss: {train_metrics['loss']:.6e} (NLL: {train_metrics['nll']:.6e}, KL: {train_metrics['kl']:.6e})")
         print(f"Val Loss:   {val_losses_dict['loss']:.6e} (NLL: {val_losses_dict['nll']:.6e}, KL: {val_losses_dict['kl']:.6e})")
         if val_metrics:
-            print(f"Val RMSE:   {val_metrics.get('rmse', 0):.4f} Mg/ha")
-            print(f"Val MAE:    {val_metrics.get('mae', 0):.4f} Mg/ha")
-            print(f"Val R²:     {val_metrics.get('r2', 0):.4f}")
+            print(f"Val RMSE:   {val_metrics.get('rmse', 0):.4f} (log space)")
+            print(f"Val MAE:    {val_metrics.get('mae', 0):.4f} (log space)")
+            print(f"Val R²:     {val_metrics.get('r2', 0):.4f} (log space)")
 
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Learning Rate: {current_lr:.6e}, KL Weight: {kl_weight:.4f}")
@@ -470,7 +475,7 @@ def main():
         else:
             epochs_without_improvement += 1
 
-        # Save best model based on R²
+        # Save best model based on R² (in log space, aligned with training objective)
         current_r2 = val_metrics.get('r2', float('-inf')) if val_metrics else float('-inf')
         if current_r2 > best_r2:
             best_r2 = current_r2
@@ -482,7 +487,7 @@ def main():
                 'val_metrics': val_metrics,
                 'r2': current_r2
             }, output_dir / 'best_r2_model.pt')
-            print(f"✓ Saved best R² model (R² = {best_r2:.4f})")
+            print(f"✓ Saved best R² model (log-space R² = {best_r2:.4f})")
 
         if epochs_without_improvement >= args.early_stopping_patience:
             print(f"\nEarly stopping triggered after {epoch} epochs")
@@ -506,18 +511,19 @@ def main():
     print("\n" + "=" * 80)
     print("Training complete!")
     print(f"Best validation loss: {best_val_loss:.6e}")
-    print(f"Best R² score: {best_r2:.4f}")
+    print(f"Best R² score (log space): {best_r2:.4f}")
     print(f"Models saved to: {output_dir}")
     print("=" * 80)
 
-    # Evaluate on test set
-    print("\nEvaluating on test set...")
+    # Evaluate on test set (denormalize to linear space for comparison with baselines)
+    print("\nEvaluating on test set (metrics in linear space for comparison)...")
     checkpoint = torch.load(output_dir / 'best_r2_model.pt', map_location=args.device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     test_losses_dict, test_metrics = validate(
         model, test_loader, args.device, kl_weight=1.0,
         agbd_scale=args.agbd_scale,
-        log_transform_agbd=args.log_transform_agbd
+        log_transform_agbd=args.log_transform_agbd,
+        denormalize_for_reporting=True  # Denormalize for final test reporting
     )
 
     print(f"Test Loss:  {test_losses_dict['loss']:.6e}")

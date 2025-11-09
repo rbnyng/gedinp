@@ -175,11 +175,13 @@ def main():
     predictions, targets, uncertainties, metrics = evaluate_model(
         model, eval_loader, args.device,
         agbd_scale=config.get('agbd_scale', 200.0),
-        log_transform_agbd=config.get('log_transform_agbd', True)
+        log_transform_agbd=config.get('log_transform_agbd', True),
+        denormalize_for_reporting=True  # Denormalize for temporal validation reporting
     )
 
     print("\n" + "=" * 80)
     print(f"TEMPORAL VALIDATION RESULTS (Years: {args.test_years})")
+    print("Metrics in linear space (Mg/ha) for comparison with baselines")
     print("=" * 80)
     for key, val in metrics.items():
         # Add units to RMSE and MAE
