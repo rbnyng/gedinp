@@ -195,91 +195,26 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
 
 
 def validate(model, dataloader, device, kl_weight=1.0):
-    model.eval()
-    total_loss = 0
-    total_nll = 0
-    total_kl = 0
-    all_predictions = []
-    all_targets = []
-    all_uncertainties = []
-    n_tiles = 0
+    """
+    Validate model using the shared evaluate_model utility.
 
-    with torch.no_grad():
-        for batch in tqdm(dataloader, desc='Validation'):
-            batch_loss = 0
-            batch_nll = 0
-            batch_kl = 0
-            n_tiles_in_batch = 0
+    This ensures consistent metric computation (global, not per-tile averaged)
+    across training validation and final evaluation.
+    """
+    from utils.evaluation import evaluate_model
 
-            for i in range(len(batch['context_coords'])):
-                context_coords = batch['context_coords'][i].to(device)
-                context_embeddings = batch['context_embeddings'][i].to(device)
-                context_agbd = batch['context_agbd'][i].to(device)
-                target_coords = batch['target_coords'][i].to(device)
-                target_embeddings = batch['target_embeddings'][i].to(device)
-                target_agbd = batch['target_agbd'][i].to(device)
+    # Use evaluate_model with loss computation enabled
+    _, _, _, metrics, loss_dict = evaluate_model(
+        model=model,
+        dataloader=dataloader,
+        device=device,
+        max_context_shots=20000,  # No subsampling during training validation
+        max_targets_per_chunk=10000,  # Large chunks for training validation
+        compute_loss=True,
+        kl_weight=kl_weight
+    )
 
-                if len(target_coords) == 0:
-                    continue
-
-                pred_mean, pred_log_var, z_mu, z_log_sigma = model(
-                    context_coords,
-                    context_embeddings,
-                    context_agbd,
-                    target_coords,
-                    target_embeddings,
-                    training=False
-                )
-
-                loss, loss_dict = neural_process_loss(
-                    pred_mean, pred_log_var, target_agbd,
-                    z_mu, z_log_sigma, kl_weight
-                )
-
-                if torch.isnan(loss) or torch.isinf(loss):
-                    print(f"Warning: NaN/Inf loss detected in validation!")
-                    print(f"  pred_mean range: [{pred_mean.min():.4f}, {pred_mean.max():.4f}]")
-                    if pred_log_var is not None:
-                        print(f"  pred_log_var range: [{pred_log_var.min():.4f}, {pred_log_var.max():.4f}]")
-                    print(f"  target range: [{target_agbd.min():.4f}, {target_agbd.max():.4f}]")
-                    continue
-
-                batch_loss += loss
-                batch_nll += loss_dict['nll']
-                batch_kl += loss_dict['kl']
-                n_tiles_in_batch += 1
-
-                # Collect predictions and targets for global metric computation
-                all_predictions.extend(pred_mean.detach().cpu().numpy().flatten())
-                all_targets.extend(target_agbd.detach().cpu().numpy().flatten())
-
-                if pred_log_var is not None:
-                    pred_std = torch.exp(0.5 * pred_log_var)
-                    all_uncertainties.extend(pred_std.detach().cpu().numpy().flatten())
-                else:
-                    all_uncertainties.extend(np.zeros_like(pred_mean.detach().cpu().numpy().flatten()))
-
-            if n_tiles_in_batch > 0:
-                batch_loss = batch_loss / n_tiles_in_batch
-                total_loss += batch_loss.item()
-                total_nll += batch_nll / n_tiles_in_batch
-                total_kl += batch_kl / n_tiles_in_batch
-                n_tiles += n_tiles_in_batch
-
-    avg_loss = total_loss / max(n_tiles, 1)
-    avg_nll = total_nll / max(n_tiles, 1)
-    avg_kl = total_kl / max(n_tiles, 1)
-
-    # Compute metrics globally (not averaged per-tile!)
-    # R² and other metrics must be computed on all predictions at once
-    global_metrics = {}
-    if len(all_predictions) > 0:
-        predictions = np.array(all_predictions)
-        targets = np.array(all_targets)
-        uncertainties = np.array(all_uncertainties)
-        global_metrics = compute_metrics(predictions, targets, uncertainties)
-
-    return {'loss': avg_loss, 'nll': avg_nll, 'kl': avg_kl}, global_metrics
+    return loss_dict, metrics
 
 
 def main():

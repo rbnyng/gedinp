@@ -15,6 +15,12 @@ from tqdm import tqdm
 from pathlib import Path
 from typing import Tuple, Dict, Optional, Union
 
+# Import for loss computation
+try:
+    from models.neural_process import neural_process_loss
+except ImportError:
+    neural_process_loss = None
+
 
 def compute_metrics(
     pred: Union[np.ndarray, torch.Tensor],
@@ -76,8 +82,11 @@ def evaluate_model(
     dataloader: DataLoader,
     device: torch.device,
     max_context_shots: int = 20000,
-    max_targets_per_chunk: int = 1000
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float]]:
+    max_targets_per_chunk: int = 1000,
+    compute_loss: bool = False,
+    kl_weight: float = 1.0
+) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float]],
+           Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, float], Dict[str, float]]]:
     """
     Evaluate model on a dataset with memory-efficient chunking.
 
@@ -87,14 +96,26 @@ def evaluate_model(
         device: Device to run evaluation on
         max_context_shots: Maximum context shots to use (subsample if exceeded)
         max_targets_per_chunk: Maximum targets to process at once
+        compute_loss: If True, also compute and return loss components
+        kl_weight: KL weight for loss computation (only used if compute_loss=True)
 
     Returns:
-        Tuple of (predictions, targets, uncertainties, avg_metrics)
+        If compute_loss=False:
+            Tuple of (predictions, targets, uncertainties, metrics)
+        If compute_loss=True:
+            Tuple of (predictions, targets, uncertainties, metrics, loss_dict)
+            where loss_dict contains {'loss', 'nll', 'kl'}
     """
     model.eval()
     all_predictions = []
     all_targets = []
     all_uncertainties = []
+
+    # Loss tracking (if requested)
+    total_loss = 0.0
+    total_nll = 0.0
+    total_kl = 0.0
+    n_tiles = 0
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc='Evaluating')):
@@ -122,47 +143,82 @@ def evaluate_model(
                     context_agbd = context_agbd[indices]
                     n_context = max_context_shots
 
-                # Process targets in chunks
-                tile_predictions = []
-                tile_targets = []
-                tile_uncertainties = []
-
-                for chunk_start in range(0, n_targets, max_targets_per_chunk):
-                    chunk_end = min(chunk_start + max_targets_per_chunk, n_targets)
-
-                    chunk_target_coords = target_coords[chunk_start:chunk_end]
-                    chunk_target_embeddings = target_embeddings[chunk_start:chunk_end]
-                    chunk_target_agbd = target_agbd[chunk_start:chunk_end]
-
-                    # Forward pass on chunk
-                    pred_mean, pred_log_var, _, _ = model(
+                # If computing loss, process all targets at once (no chunking)
+                # because KL divergence requires the full latent representation
+                if compute_loss:
+                    # Forward pass on all targets
+                    pred_mean, pred_log_var, z_mu, z_log_sigma = model(
                         context_coords,
                         context_embeddings,
                         context_agbd,
-                        chunk_target_coords,
-                        chunk_target_embeddings,
+                        target_coords,
+                        target_embeddings,
                         training=False
                     )
 
-                    tile_predictions.append(pred_mean.detach().cpu().numpy().flatten())
-                    tile_targets.append(chunk_target_agbd.detach().cpu().numpy().flatten())
+                    # Compute loss
+                    if neural_process_loss is not None:
+                        loss, loss_dict = neural_process_loss(
+                            pred_mean, pred_log_var, target_agbd,
+                            z_mu, z_log_sigma, kl_weight
+                        )
+
+                        if not (torch.isnan(loss) or torch.isinf(loss)):
+                            total_loss += loss.item()
+                            total_nll += loss_dict['nll']
+                            total_kl += loss_dict['kl']
+                            n_tiles += 1
+
+                    pred_mean_np = pred_mean.detach().cpu().numpy().flatten()
+                    target_np = target_agbd.detach().cpu().numpy().flatten()
 
                     if pred_log_var is not None:
-                        tile_uncertainties.append(
-                            torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
-                        )
+                        pred_std_np = torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
                     else:
-                        tile_uncertainties.append(np.zeros_like(pred_mean.detach().cpu().numpy().flatten()))
+                        pred_std_np = np.zeros_like(pred_mean_np)
 
-                    # Clear GPU cache after each chunk
-                    device_str = str(device) if not isinstance(device, str) else device
-                    if 'cuda' in device_str:
-                        torch.cuda.empty_cache()
+                else:
+                    # Process targets in chunks for memory efficiency
+                    tile_predictions = []
+                    tile_targets = []
+                    tile_uncertainties = []
 
-                # Concatenate chunks
-                pred_mean_np = np.concatenate(tile_predictions)
-                target_np = np.concatenate(tile_targets)
-                pred_std_np = np.concatenate(tile_uncertainties)
+                    for chunk_start in range(0, n_targets, max_targets_per_chunk):
+                        chunk_end = min(chunk_start + max_targets_per_chunk, n_targets)
+
+                        chunk_target_coords = target_coords[chunk_start:chunk_end]
+                        chunk_target_embeddings = target_embeddings[chunk_start:chunk_end]
+                        chunk_target_agbd = target_agbd[chunk_start:chunk_end]
+
+                        # Forward pass on chunk
+                        pred_mean, pred_log_var, _, _ = model(
+                            context_coords,
+                            context_embeddings,
+                            context_agbd,
+                            chunk_target_coords,
+                            chunk_target_embeddings,
+                            training=False
+                        )
+
+                        tile_predictions.append(pred_mean.detach().cpu().numpy().flatten())
+                        tile_targets.append(chunk_target_agbd.detach().cpu().numpy().flatten())
+
+                        if pred_log_var is not None:
+                            tile_uncertainties.append(
+                                torch.exp(0.5 * pred_log_var).detach().cpu().numpy().flatten()
+                            )
+                        else:
+                            tile_uncertainties.append(np.zeros_like(pred_mean.detach().cpu().numpy().flatten()))
+
+                        # Clear GPU cache after each chunk
+                        device_str = str(device) if not isinstance(device, str) else device
+                        if 'cuda' in device_str:
+                            torch.cuda.empty_cache()
+
+                    # Concatenate chunks
+                    pred_mean_np = np.concatenate(tile_predictions)
+                    target_np = np.concatenate(tile_targets)
+                    pred_std_np = np.concatenate(tile_uncertainties)
 
                 # Store predictions
                 all_predictions.extend(pred_mean_np)
@@ -183,7 +239,21 @@ def evaluate_model(
     # R² and other metrics must be computed globally, not averaged across tiles
     final_metrics = compute_metrics(predictions, targets, uncertainties)
 
-    return predictions, targets, uncertainties, final_metrics
+    if compute_loss:
+        # Compute average loss components
+        avg_loss = total_loss / max(n_tiles, 1)
+        avg_nll = total_nll / max(n_tiles, 1)
+        avg_kl = total_kl / max(n_tiles, 1)
+
+        loss_dict = {
+            'loss': avg_loss,
+            'nll': avg_nll,
+            'kl': avg_kl
+        }
+
+        return predictions, targets, uncertainties, final_metrics, loss_dict
+    else:
+        return predictions, targets, uncertainties, final_metrics
 
 
 def plot_results(
