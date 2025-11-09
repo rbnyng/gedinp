@@ -84,7 +84,7 @@ def main():
     print("Step 1: Querying GEDI data for temporal holdout...")
     print("=" * 80)
 
-    querier = GEDIQuerier()
+    querier = GEDIQuerier(cache_dir=args.cache_dir)
 
     all_gedi_dfs = []
     for year in args.test_years:

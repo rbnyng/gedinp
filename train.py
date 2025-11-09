@@ -288,7 +288,7 @@ def main():
     print()
 
     print("Step 1: Querying GEDI data...")
-    querier = GEDIQuerier()
+    querier = GEDIQuerier(cache_dir=args.cache_dir)
     gedi_df = querier.query_region_tiles(
         region_bbox=args.region_bbox,
         tile_size=0.1,
