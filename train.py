@@ -196,12 +196,14 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
     }
 
 
-def validate(model, dataloader, device, kl_weight=1.0):
+def validate(model, dataloader, device, kl_weight=1.0, agbd_scale=200.0, log_transform_agbd=True):
     """
     Validate model using the shared evaluate_model utility.
 
     This ensures consistent metric computation (global, not per-tile averaged)
     across training validation and final evaluation.
+
+    Metrics are computed in raw Mg/ha (denormalized) for direct comparison with baselines.
     """
     from utils.evaluation import evaluate_model
 
@@ -213,7 +215,9 @@ def validate(model, dataloader, device, kl_weight=1.0):
         max_context_shots=20000,  # No subsampling during training validation
         max_targets_per_chunk=10000,  # Large chunks for training validation
         compute_loss=True,
-        kl_weight=kl_weight
+        kl_weight=kl_weight,
+        agbd_scale=agbd_scale,
+        log_transform_agbd=log_transform_agbd
     )
 
     return loss_dict, metrics
@@ -432,14 +436,18 @@ def main():
         train_losses.append(train_metrics['loss'])
 
         # Validate
-        val_losses_dict, val_metrics = validate(model, val_loader, args.device, kl_weight)
+        val_losses_dict, val_metrics = validate(
+            model, val_loader, args.device, kl_weight,
+            agbd_scale=args.agbd_scale,
+            log_transform_agbd=args.log_transform_agbd
+        )
         val_losses.append(val_losses_dict['loss'])
 
         print(f"Train Loss: {train_metrics['loss']:.6e} (NLL: {train_metrics['nll']:.6e}, KL: {train_metrics['kl']:.6e})")
         print(f"Val Loss:   {val_losses_dict['loss']:.6e} (NLL: {val_losses_dict['nll']:.6e}, KL: {val_losses_dict['kl']:.6e})")
         if val_metrics:
-            print(f"Val RMSE:   {val_metrics.get('rmse', 0):.4f}")
-            print(f"Val MAE:    {val_metrics.get('mae', 0):.4f}")
+            print(f"Val RMSE:   {val_metrics.get('rmse', 0):.4f} Mg/ha")
+            print(f"Val MAE:    {val_metrics.get('mae', 0):.4f} Mg/ha")
             print(f"Val R²:     {val_metrics.get('r2', 0):.4f}")
 
         current_lr = optimizer.param_groups[0]['lr']
@@ -506,12 +514,16 @@ def main():
     print("\nEvaluating on test set...")
     checkpoint = torch.load(output_dir / 'best_r2_model.pt', map_location=args.device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
-    test_losses_dict, test_metrics = validate(model, test_loader, args.device, kl_weight=1.0)
+    test_losses_dict, test_metrics = validate(
+        model, test_loader, args.device, kl_weight=1.0,
+        agbd_scale=args.agbd_scale,
+        log_transform_agbd=args.log_transform_agbd
+    )
 
     print(f"Test Loss:  {test_losses_dict['loss']:.6e}")
     if test_metrics:
-        print(f"Test RMSE:  {test_metrics.get('rmse', 0):.4f}")
-        print(f"Test MAE:   {test_metrics.get('mae', 0):.4f}")
+        print(f"Test RMSE:  {test_metrics.get('rmse', 0):.4f} Mg/ha")
+        print(f"Test MAE:   {test_metrics.get('mae', 0):.4f} Mg/ha")
         print(f"Test R²:    {test_metrics.get('r2', 0):.4f}")
 
     # Update best model checkpoint with test metrics
