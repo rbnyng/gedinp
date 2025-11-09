@@ -14,6 +14,9 @@ import numpy as np
 import tiledb
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import json
+from pathlib import Path
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -29,7 +32,8 @@ class GEDIQuerier:
         url: str = "https://s3.gfz-potsdam.de",
         local_path: Optional[str] = None,
         memory_budget_mb: int = 512,
-        max_workers: int = 8
+        max_workers: int = 8,
+        cache_dir: Optional[str] = None
     ):
         """
         Initialize GEDI data provider.
@@ -41,6 +45,7 @@ class GEDIQuerier:
             local_path: Path to local gediDB if storage_type='local'
             memory_budget_mb: TileDB memory budget in MB (default: 512)
             max_workers: Maximum number of parallel workers for tile/chunk queries (default: 8)
+            cache_dir: Optional directory to cache query results (default: None, no caching)
         """
         # Configure TileDB memory limits to prevent huge allocations
         memory_budget_bytes = memory_budget_mb * 1024 * 1024
@@ -70,6 +75,12 @@ class GEDIQuerier:
         self.memory_budget_mb = memory_budget_mb
         self.max_workers = max_workers
 
+        # Set up caching
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        if self.cache_dir:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"GEDI query caching enabled: {self.cache_dir}")
+
         if storage_type == 's3':
             self.provider = gdb.GEDIProvider(
                 storage_type='s3',
@@ -81,6 +92,47 @@ class GEDIQuerier:
                 storage_type='local',
                 local_path=local_path
             )
+
+    def _generate_cache_key(
+        self,
+        bbox: tuple,
+        start_time: str,
+        end_time: str,
+        variables: List[str],
+        quality_filter: bool,
+        min_agbd: float,
+        max_agbd: Optional[float]
+    ) -> str:
+        """
+        Generate a unique cache key for a query.
+
+        Args:
+            bbox: Bounding box (min_lon, min_lat, max_lon, max_lat)
+            start_time: Start date
+            end_time: End date
+            variables: List of variables
+            quality_filter: Quality filter flag
+            min_agbd: Minimum AGBD threshold
+            max_agbd: Maximum AGBD threshold
+
+        Returns:
+            Hash string for cache lookup
+        """
+        # Create a deterministic representation of query parameters
+        cache_params = {
+            'bbox': [round(x, 6) for x in bbox],  # Round to ~10cm precision
+            'start_time': start_time,
+            'end_time': end_time,
+            'variables': sorted(variables),  # Sort for consistency
+            'quality_filter': quality_filter,
+            'min_agbd': round(min_agbd, 2),
+            'max_agbd': round(max_agbd, 2) if max_agbd is not None else None
+        }
+
+        # Convert to JSON string and hash
+        params_str = json.dumps(cache_params, sort_keys=True)
+        hash_obj = hashlib.md5(params_str.encode())
+        return hash_obj.hexdigest()
 
     def query_bbox(
         self,
@@ -113,6 +165,23 @@ class GEDIQuerier:
             variables = [
                 "agbd",  # Aboveground biomass density
             ]
+
+        # Check cache if enabled
+        if self.cache_dir:
+            cache_key = self._generate_cache_key(
+                bbox, start_time, end_time, variables,
+                quality_filter, min_agbd, max_agbd
+            )
+            cache_file = self.cache_dir / f"gedi_{cache_key}.parquet"
+
+            if cache_file.exists():
+                logger.info(f"Loading cached GEDI data from {cache_file.name}")
+                try:
+                    df = pd.read_parquet(cache_file)
+                    logger.info(f"Loaded {len(df)} cached shots")
+                    return df
+                except Exception as e:
+                    logger.warning(f"Failed to load cache file: {e}, querying fresh data")
 
         logger.info(f"Querying GEDI data for bbox {bbox}")
         logger.info(f"Time range: {start_time} to {end_time}")
@@ -165,6 +234,20 @@ class GEDIQuerier:
                 df = df.dropna(subset=['latitude', 'longitude'])
 
             logger.info(f"Returning {len(df)} shots after filtering")
+
+            # Cache the result if caching is enabled
+            if self.cache_dir and len(df) > 0:
+                try:
+                    cache_key = self._generate_cache_key(
+                        bbox, start_time, end_time, variables,
+                        quality_filter, min_agbd, max_agbd
+                    )
+                    cache_file = self.cache_dir / f"gedi_{cache_key}.parquet"
+                    df.to_parquet(cache_file, index=False)
+                    logger.info(f"Cached query result to {cache_file.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to cache result: {e}")
+
             return df
 
         except MemoryError as e:

@@ -78,13 +78,14 @@ def query_context_gedi(
     region_bbox: tuple,
     n_context: int,
     start_time: str,
-    end_time: str
+    end_time: str,
+    cache_dir: Optional[str] = None
 ) -> pd.DataFrame:
     print(f"\nQuerying GEDI context shots...")
     print(f"Region: {region_bbox}")
     print(f"Requesting {n_context} nearest shots")
 
-    querier = GEDIQuerier()
+    querier = GEDIQuerier(cache_dir=cache_dir)
 
     # Query a larger region to ensure we get enough shots
     min_lon, min_lat, max_lon, max_lat = region_bbox
@@ -404,7 +405,8 @@ def main():
         tuple(args.region),
         args.n_context,
         args.start_time,
-        args.end_time
+        args.end_time,
+        args.cache_dir
     )
 
     print(f"\nInitializing GeoTessera extractor (year={args.embedding_year})...")
