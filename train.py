@@ -400,6 +400,15 @@ def main():
         coord_noise_std=0.0,
         global_bounds=global_bounds
     )
+    test_dataset = GEDINeuralProcessDataset(
+        test_df,
+        min_shots_per_tile=args.min_shots_per_tile,
+        agbd_scale=args.agbd_scale,
+        log_transform_agbd=args.log_transform_agbd,
+        augment_coords=False,
+        coord_noise_std=0.0,
+        global_bounds=global_bounds
+    )
 
     train_loader = DataLoader(
         train_dataset,
@@ -410,6 +419,13 @@ def main():
     )
     val_loader = DataLoader(
         val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=collate_neural_process,
+        num_workers=args.num_workers
+    )
+    test_loader = DataLoader(
+        test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_neural_process,
@@ -535,6 +551,23 @@ def main():
     print(f"Best R² score: {best_r2:.4f}")
     print(f"Models saved to: {output_dir}")
     print("=" * 80)
+
+    # Evaluate on test set
+    print("\nEvaluating on test set...")
+    checkpoint = torch.load(output_dir / 'best_r2_model.pt', map_location=args.device, weights_only=False)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    test_losses_dict, test_metrics = validate(model, test_loader, args.device, kl_weight=1.0)
+
+    print(f"Test Loss:  {test_losses_dict['loss']:.6e}")
+    if test_metrics:
+        print(f"Test RMSE:  {test_metrics.get('rmse', 0):.4f}")
+        print(f"Test MAE:   {test_metrics.get('mae', 0):.4f}")
+        print(f"Test R²:    {test_metrics.get('r2', 0):.4f}")
+
+    # Update best model checkpoint with test metrics
+    checkpoint['test_metrics'] = test_metrics
+    torch.save(checkpoint, output_dir / 'best_r2_model.pt')
+    print("✓ Added test metrics to best model checkpoint")
 
     if args.generate_diagnostics:
         print("\nGenerating post-training diagnostics...")
