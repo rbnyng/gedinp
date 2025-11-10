@@ -54,8 +54,12 @@ class SpatialTileSplitter:
         Returns:
             (train_df, val_df, test_df)
         """
+        # Sort tiles to ensure consistent order before shuffling
+        # This ensures reproducibility even if input DataFrame row order varies
+        sorted_tiles = np.sort(self.tile_ids)
+
         # Shuffle tiles
-        shuffled_tiles = self.tile_ids.copy()
+        shuffled_tiles = sorted_tiles.copy()
         np.random.shuffle(shuffled_tiles)
 
         # Calculate split sizes
@@ -165,7 +169,8 @@ class BufferedSpatialSplitter:
         Returns:
             (train_df, val_df, test_df)
         """
-        tile_ids = self.tile_info.index.values
+        # Sort tiles to ensure consistent order before shuffling
+        tile_ids = np.sort(self.tile_info.index.values)
         n_tiles = len(tile_ids)
 
         # Shuffle and select test tiles
