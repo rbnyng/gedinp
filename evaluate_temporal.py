@@ -17,6 +17,7 @@ from data.dataset import GEDINeuralProcessDataset, collate_neural_process
 from utils.evaluation import evaluate_model, plot_results, compute_metrics
 from utils.config import load_config, save_config, get_global_bounds
 from utils.model import load_model_from_checkpoint
+from utils.normalization import denormalize_agbd
 
 
 def main():
@@ -177,19 +178,19 @@ def main():
         model, eval_loader, args.device,
         agbd_scale=config.get('agbd_scale', 200.0),
         log_transform_agbd=config.get('log_transform_agbd', True),
-        denormalize_for_reporting=True  # Denormalize for temporal validation reporting
+        denormalize_for_reporting=False  # Parameter deprecated but kept for compatibility
     )
 
     print("\n" + "=" * 80)
     print(f"TEMPORAL VALIDATION RESULTS (Years: {args.test_years})")
-    print("Metrics in linear space (Mg/ha) for comparison with baselines")
     print("=" * 80)
-    for key, val in metrics.items():
-        # Add units to RMSE and MAE
-        if key in ['rmse', 'mae']:
-            print(f"{key.upper()}: {val:.4f} Mg/ha")
-        else:
-            print(f"{key.upper()}: {val:.4f}")
+    print("\nLog-space metrics (aligned with training):")
+    print(f"  Log R²:    {metrics.get('log_r2', 0):.4f}")
+    print(f"  Log RMSE:  {metrics.get('log_rmse', 0):.4f}")
+    print(f"  Log MAE:   {metrics.get('log_mae', 0):.4f}")
+    print("\nLinear-space metrics (Mg/ha, for interpretability):")
+    print(f"  RMSE:      {metrics.get('linear_rmse', 0):.2f} Mg/ha")
+    print(f"  MAE:       {metrics.get('linear_mae', 0):.2f} Mg/ha")
     print("=" * 80)
 
     print("\nSaving results...")
@@ -208,18 +209,30 @@ def main():
     save_config(results, results_path)
     print(f"Saved metrics to: {results_path}")
 
+    # Denormalize predictions and targets for plotting and saving (convert to Mg/ha)
+    predictions_linear = denormalize_agbd(
+        predictions,
+        agbd_scale=config.get('agbd_scale', 200.0),
+        log_transform=config.get('log_transform_agbd', True)
+    )
+    targets_linear = denormalize_agbd(
+        targets,
+        agbd_scale=config.get('agbd_scale', 200.0),
+        log_transform=config.get('log_transform_agbd', True)
+    )
+
     results_df = pd.DataFrame({
-        'true': targets,
-        'predicted': predictions,
+        'true': targets_linear,
+        'predicted': predictions_linear,
         'uncertainty': uncertainties,
-        'residual': predictions - targets
+        'residual': predictions_linear - targets_linear
     })
     predictions_path = model_dir / f'temporal_predictions_{output_suffix}.csv'
     results_df.to_csv(predictions_path, index=False)
     print(f"Saved predictions to: {predictions_path}")
 
     years_label = '_'.join(map(str, args.test_years))
-    plot_results(predictions, targets, uncertainties, model_dir, years_label)
+    plot_results(predictions_linear, targets_linear, uncertainties, model_dir, years_label)
 
     print("\n" + "=" * 80)
     print("TEMPORAL VALIDATION COMPLETE")

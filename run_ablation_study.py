@@ -52,7 +52,7 @@ def run_training(base_args, architecture_mode, output_subdir):
             'val_metrics': checkpoint.get('val_metrics', {}),
             'test_metrics': checkpoint.get('test_metrics', {}),
             'epoch': checkpoint.get('epoch', -1),
-            'r2': checkpoint.get('r2', float('-inf')),
+            'log_r2': checkpoint.get('log_r2', float('-inf')),
             'output_dir': str(output_subdir)
         }
     except Exception as e:
@@ -67,12 +67,16 @@ def compare_results(results, output_dir):
             continue
         row = {
             'Architecture': res['architecture'],
-            'Val R²': res['r2'],
-            'Val RMSE': res['val_metrics'].get('rmse', np.nan),
-            'Val MAE': res['val_metrics'].get('mae', np.nan),
-            'Test R²': res['test_metrics'].get('r2', np.nan),
-            'Test RMSE': res['test_metrics'].get('rmse', np.nan),
-            'Test MAE': res['test_metrics'].get('mae', np.nan),
+            'Val Log R²': res['log_r2'],
+            'Val Log RMSE': res['val_metrics'].get('log_rmse', np.nan),
+            'Val Log MAE': res['val_metrics'].get('log_mae', np.nan),
+            'Val Linear RMSE': res['val_metrics'].get('linear_rmse', np.nan),
+            'Val Linear MAE': res['val_metrics'].get('linear_mae', np.nan),
+            'Test Log R²': res['test_metrics'].get('log_r2', np.nan),
+            'Test Log RMSE': res['test_metrics'].get('log_rmse', np.nan),
+            'Test Log MAE': res['test_metrics'].get('log_mae', np.nan),
+            'Test Linear RMSE': res['test_metrics'].get('linear_rmse', np.nan),
+            'Test Linear MAE': res['test_metrics'].get('linear_mae', np.nan),
             'Epochs': res['epoch'],
             'Mean Uncertainty': res['val_metrics'].get('mean_uncertainty', np.nan)
         }

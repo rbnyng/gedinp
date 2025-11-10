@@ -106,8 +106,8 @@ def evaluate_model(
         kl_weight: KL weight for loss computation (only used if compute_loss=True)
         agbd_scale: AGBD scale factor for denormalization (default: 200.0)
         log_transform_agbd: Whether log transform was used (default: True)
-        denormalize_for_reporting: If True, denormalize to linear space for final reporting.
-            If False (default), keep in log space for model selection during training.
+        denormalize_for_reporting: Deprecated parameter (kept for compatibility).
+            Metrics now always include both log-space and linear-space values.
 
     Returns:
         If compute_loss=False:
@@ -116,15 +116,12 @@ def evaluate_model(
             Tuple of (predictions, targets, uncertainties, metrics, loss_dict)
             where loss_dict contains {'loss', 'nll', 'kl'}
 
-        When denormalize_for_reporting=False (default):
-            - predictions, targets, uncertainties are in normalized log space
-            - metrics (RMSE, MAE, R²) are in log space (aligned with training objective)
-            - Use this for model selection during training
+        predictions, targets, uncertainties are in normalized log space
 
-        When denormalize_for_reporting=True:
-            - predictions, targets, uncertainties are in raw Mg/ha (denormalized)
-            - metrics (RMSE, MAE, R²) are in linear space
-            - Use this for final test reporting and comparison with baselines
+        metrics dict contains:
+            - log_rmse, log_mae, log_r2: metrics in log space (aligned with training)
+            - linear_rmse, linear_mae: metrics in linear space (Mg/ha, for interpretability)
+            - mean_uncertainty: average predicted uncertainty (if available)
     """
     model.eval()
     all_predictions = []
@@ -255,22 +252,27 @@ def evaluate_model(
     targets = np.array(all_targets)
     uncertainties = np.array(all_uncertainties)
 
-    # Conditionally denormalize based on use case
-    if denormalize_for_reporting:
-        # For final test reporting: denormalize to raw Mg/ha for comparison with baselines
-        predictions_out = denormalize_agbd(predictions, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
-        targets_out = denormalize_agbd(targets, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
-        uncertainties_out = denormalize_std(uncertainties, predictions, agbd_scale=agbd_scale)
-    else:
-        # For training validation: keep in log space for model selection
-        # This aligns metric computation with the training objective
-        predictions_out = predictions
-        targets_out = targets
-        uncertainties_out = uncertainties
+    # Compute metrics in both spaces
+    # 1. Log-space metrics (aligned with training objective)
+    log_metrics = compute_metrics(predictions, targets, uncertainties)
 
-    # Compute metrics (space depends on denormalize_for_reporting flag)
-    # R² and other metrics must be computed globally, not averaged across tiles
-    final_metrics = compute_metrics(predictions_out, targets_out, uncertainties_out)
+    # 2. Linear-space metrics (for practical interpretation)
+    predictions_linear = denormalize_agbd(predictions, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
+    targets_linear = denormalize_agbd(targets, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
+    linear_metrics = compute_metrics(predictions_linear, targets_linear)
+
+    # Combine metrics with clear naming
+    final_metrics = {
+        'log_rmse': log_metrics['rmse'],
+        'log_mae': log_metrics['mae'],
+        'log_r2': log_metrics['r2'],
+        'linear_rmse': linear_metrics['rmse'],
+        'linear_mae': linear_metrics['mae'],
+    }
+
+    # Add uncertainty if available
+    if 'mean_uncertainty' in log_metrics:
+        final_metrics['mean_uncertainty'] = log_metrics['mean_uncertainty']
 
     if compute_loss:
         # Compute average loss components
@@ -284,9 +286,9 @@ def evaluate_model(
             'kl': avg_kl
         }
 
-        return predictions_out, targets_out, uncertainties_out, final_metrics, loss_dict
+        return predictions, targets, uncertainties, final_metrics, loss_dict
     else:
-        return predictions_out, targets_out, uncertainties_out, final_metrics
+        return predictions, targets, uncertainties, final_metrics
 
 
 def plot_results(

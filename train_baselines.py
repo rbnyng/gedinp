@@ -91,14 +91,45 @@ def prepare_data(df, log_transform=True, agbd_scale=200.0):
 
 
 def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_transform=True):
-    # Predict (normalized)
+    """
+    Evaluate baseline model and compute metrics in both log and linear space.
+
+    Args:
+        model: Baseline model (RF, XGBoost, or IDW)
+        coords: Coordinates for prediction
+        embeddings: Embeddings for prediction
+        agbd_true: True AGBD values in linear space (Mg/ha)
+        agbd_scale: AGBD scale factor (default: 200.0)
+        log_transform: Whether log transform was used (default: True)
+
+    Returns:
+        metrics: Dict with log_rmse, log_mae, log_r2, linear_rmse, linear_mae
+        pred: Predictions in linear space (Mg/ha)
+        pred_std_norm: Predicted std in normalized space
+    """
+    # Predict (normalized, in log space)
     pred_norm, pred_std_norm = model.predict(coords, embeddings, return_std=True)
 
-    # Denormalize predictions
+    # Normalize true values to log space for log-space metrics
+    agbd_true_norm = normalize_agbd(agbd_true, agbd_scale=agbd_scale, log_transform=log_transform)
+
+    # Compute log-space metrics
+    log_metrics = compute_metrics(pred_norm, agbd_true_norm)
+
+    # Denormalize predictions to linear space
     pred = denormalize_agbd(pred_norm, agbd_scale=agbd_scale, log_transform=log_transform)
 
-    # Compute metrics
-    metrics = compute_metrics(pred, agbd_true)
+    # Compute linear-space metrics
+    linear_metrics = compute_metrics(pred, agbd_true)
+
+    # Combine metrics
+    metrics = {
+        'log_rmse': log_metrics['rmse'],
+        'log_mae': log_metrics['mae'],
+        'log_r2': log_metrics['r2'],
+        'linear_rmse': linear_metrics['rmse'],
+        'linear_mae': linear_metrics['mae'],
+    }
 
     return metrics, pred, pred_std_norm
 
@@ -366,12 +397,16 @@ def main():
         row = {
             'Model': model_name.upper(),
             'Train Time (s)': f"{model_results['train_time']:.2f}",
-            'Val RMSE': f"{model_results['val_metrics']['rmse']:.2f}",
-            'Val MAE': f"{model_results['val_metrics']['mae']:.2f}",
-            'Val R²': f"{model_results['val_metrics']['r2']:.4f}",
-            'Test RMSE': f"{model_results['test_metrics']['rmse']:.2f}",
-            'Test MAE': f"{model_results['test_metrics']['mae']:.2f}",
-            'Test R²': f"{model_results['test_metrics']['r2']:.4f}",
+            'Val Log R²': f"{model_results['val_metrics']['log_r2']:.4f}",
+            'Val Log RMSE': f"{model_results['val_metrics']['log_rmse']:.4f}",
+            'Val Log MAE': f"{model_results['val_metrics']['log_mae']:.4f}",
+            'Val RMSE (Mg/ha)': f"{model_results['val_metrics']['linear_rmse']:.2f}",
+            'Val MAE (Mg/ha)': f"{model_results['val_metrics']['linear_mae']:.2f}",
+            'Test Log R²': f"{model_results['test_metrics']['log_r2']:.4f}",
+            'Test Log RMSE': f"{model_results['test_metrics']['log_rmse']:.4f}",
+            'Test Log MAE': f"{model_results['test_metrics']['log_mae']:.4f}",
+            'Test RMSE (Mg/ha)': f"{model_results['test_metrics']['linear_rmse']:.2f}",
+            'Test MAE (Mg/ha)': f"{model_results['test_metrics']['linear_mae']:.2f}",
         }
         summary_table.append(row)
 
