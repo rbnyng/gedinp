@@ -192,9 +192,7 @@ def run_inference(
     query_df: pd.DataFrame,
     global_bounds: tuple,
     batch_size: int,
-    device: str,
-    agbd_scale: float = 200.0,
-    log_transform: bool = True
+    device: str
 ) -> tuple:
     print(f"\nRunning inference on {len(query_df)} query points...")
     print(f"Using {len(context_df)} context shots")
@@ -204,7 +202,7 @@ def run_inference(
     context_coords = context_df[['longitude', 'latitude']].values
     context_coords_norm = normalize_coords(context_coords, global_bounds)
     context_embeddings = np.stack(context_df['embedding_patch'].values)
-    context_agbd_norm = normalize_agbd(context_df['agbd'].values[:, None], agbd_scale=agbd_scale, log_transform=log_transform)
+    context_agbd_norm = normalize_agbd(context_df['agbd'].values[:, None])
 
     context_coords_t = torch.from_numpy(context_coords_norm).float().to(device)
     context_embeddings_t = torch.from_numpy(context_embeddings).float().to(device)
@@ -247,8 +245,8 @@ def run_inference(
     predictions_norm = np.concatenate(all_predictions)
     uncertainties_norm = np.concatenate(all_uncertainties)
 
-    predictions = denormalize_agbd(predictions_norm, agbd_scale=agbd_scale, log_transform=log_transform)
-    uncertainties = denormalize_std(uncertainties_norm, predictions_norm, agbd_scale=agbd_scale, simple_transform=True)
+    predictions = denormalize_agbd(predictions_norm)
+    uncertainties = denormalize_std(uncertainties_norm, predictions_norm, simple_transform=True)
 
     print(f"\nPrediction statistics:")
     print(f"  Mean AGB: {predictions.mean():.2f} Mg/ha")
@@ -458,9 +456,7 @@ def main():
         query_df,
         global_bounds,
         args.batch_size,
-        args.device,
-        agbd_scale=config.get('agbd_scale', 200.0),
-        log_transform=config.get('log_transform_agbd', True)
+        args.device
     )
 
     full_predictions = np.full(n_rows * n_cols, np.nan)

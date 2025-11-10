@@ -8,50 +8,7 @@ This module provides functions for normalizing and denormalizing:
 """
 
 import numpy as np
-from typing import Tuple, Union
-import pandas as pd
-
-
-def compute_agbd_scale(
-    agbd: Union[np.ndarray, pd.Series],
-    percentile: float = 99.0,
-    max_cap: float = 500.0,
-    default_scale: float = 200.0
-) -> float:
-    """
-    Compute data-driven AGBD scale based on percentile of training data.
-
-    Args:
-        agbd: AGBD values from training data (Mg/ha)
-        percentile: Percentile to use for scale (default: 99.0)
-        max_cap: Maximum cap on scale value (default: 500.0 Mg/ha)
-        default_scale: Default scale if data is empty or invalid (default: 200.0)
-
-    Returns:
-        Computed scale factor (float)
-    """
-    if isinstance(agbd, pd.Series):
-        agbd = agbd.values
-
-    # Remove NaN values
-    agbd_clean = agbd[~np.isnan(agbd)]
-
-    if len(agbd_clean) == 0:
-        print(f"Warning: No valid AGBD values found. Using default scale: {default_scale}")
-        return default_scale
-
-    # Compute percentile and apply cap
-    scale = np.percentile(agbd_clean, percentile)
-    scale = min(scale, max_cap)
-
-    # Ensure scale is reasonable (at least 50 Mg/ha)
-    scale = max(scale, 50.0)
-
-    print(f"Computed AGBD scale: {scale:.2f} Mg/ha (from {percentile}th percentile, capped at {max_cap})")
-    print(f"  Data range: [{agbd_clean.min():.2f}, {agbd_clean.max():.2f}] Mg/ha")
-    print(f"  Mean: {agbd_clean.mean():.2f} Mg/ha, Median: {np.median(agbd_clean):.2f} Mg/ha")
-
-    return float(scale)
+from typing import Tuple
 
 
 def normalize_coords(coords: np.ndarray, global_bounds: Tuple[float, float, float, float]) -> np.ndarray:
