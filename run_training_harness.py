@@ -184,12 +184,16 @@ def collect_results_neural_process(output_subdirs):
             results.append({
                 'seed': seed,
                 'output_dir': str(output_dir),
-                'val_rmse': val_metrics.get('rmse', np.nan),
-                'val_mae': val_metrics.get('mae', np.nan),
-                'val_r2': val_metrics.get('r2', np.nan),
-                'test_rmse': test_metrics.get('rmse', np.nan),
-                'test_mae': test_metrics.get('mae', np.nan),
-                'test_r2': test_metrics.get('r2', np.nan),
+                'val_log_rmse': val_metrics.get('log_rmse', np.nan),
+                'val_log_mae': val_metrics.get('log_mae', np.nan),
+                'val_log_r2': val_metrics.get('log_r2', np.nan),
+                'val_linear_rmse': val_metrics.get('linear_rmse', np.nan),
+                'val_linear_mae': val_metrics.get('linear_mae', np.nan),
+                'test_log_rmse': test_metrics.get('log_rmse', np.nan),
+                'test_log_mae': test_metrics.get('log_mae', np.nan),
+                'test_log_r2': test_metrics.get('log_r2', np.nan),
+                'test_linear_rmse': test_metrics.get('linear_rmse', np.nan),
+                'test_linear_mae': test_metrics.get('linear_mae', np.nan),
                 'epoch': checkpoint.get('epoch', -1),
                 'mean_uncertainty': val_metrics.get('mean_uncertainty', np.nan),
             })
@@ -229,12 +233,16 @@ def collect_results_baselines(output_subdirs):
                     'seed': seed,
                     'model': model_name,
                     'output_dir': str(output_dir),
-                    'val_rmse': val_metrics.get('rmse', np.nan),
-                    'val_mae': val_metrics.get('mae', np.nan),
-                    'val_r2': val_metrics.get('r2', np.nan),
-                    'test_rmse': test_metrics.get('rmse', np.nan),
-                    'test_mae': test_metrics.get('mae', np.nan),
-                    'test_r2': test_metrics.get('r2', np.nan),
+                    'val_log_rmse': val_metrics.get('log_rmse', np.nan),
+                    'val_log_mae': val_metrics.get('log_mae', np.nan),
+                    'val_log_r2': val_metrics.get('log_r2', np.nan),
+                    'val_linear_rmse': val_metrics.get('linear_rmse', np.nan),
+                    'val_linear_mae': val_metrics.get('linear_mae', np.nan),
+                    'test_log_rmse': test_metrics.get('log_rmse', np.nan),
+                    'test_log_mae': test_metrics.get('log_mae', np.nan),
+                    'test_log_r2': test_metrics.get('log_r2', np.nan),
+                    'test_linear_rmse': test_metrics.get('linear_rmse', np.nan),
+                    'test_linear_mae': test_metrics.get('linear_mae', np.nan),
                     'train_time': metrics_dict.get('train_time', np.nan),
                 })
 
@@ -253,19 +261,21 @@ def compute_statistics(df, group_by=None):
 
     if group_by:
         grouped = df.groupby(group_by)[metric_cols]
-    else:
-        grouped = df[metric_cols]
-
-    stats = pd.DataFrame({
-        'mean': grouped.mean(),
-        'std': grouped.std(),
-        'min': grouped.min(),
-        'max': grouped.max(),
-        'median': grouped.median(),
-    })
-
-    if group_by:
+        # Use agg to compute all statistics at once
+        stats = grouped.agg(['mean', 'std', 'min', 'max', 'median'])
+        # Flatten the MultiIndex columns
+        stats.columns = ['_'.join(col).strip() for col in stats.columns.values]
         stats = stats.reset_index()
+    else:
+        # No grouping, compute statistics across all rows
+        stats_dict = {}
+        for col in metric_cols:
+            stats_dict[f'{col}_mean'] = [df[col].mean()]
+            stats_dict[f'{col}_std'] = [df[col].std()]
+            stats_dict[f'{col}_min'] = [df[col].min()]
+            stats_dict[f'{col}_max'] = [df[col].max()]
+            stats_dict[f'{col}_median'] = [df[col].median()]
+        stats = pd.DataFrame(stats_dict)
 
     return stats
 
@@ -280,14 +290,20 @@ def create_visualizations(df, output_dir, script_type):
 
 def create_neural_process_plots(df, output_dir):
     """Create plots for Neural Process results."""
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(2, 5, figsize=(24, 8))
     fig.suptitle('Neural Process Multi-Seed Results', fontsize=16, fontweight='bold')
 
-    metrics = ['r2', 'rmse', 'mae']
+    metrics = [
+        ('log_r2', 'Log R²'),
+        ('log_rmse', 'Log RMSE'),
+        ('log_mae', 'Log MAE'),
+        ('linear_rmse', 'Linear RMSE (Mg/ha)'),
+        ('linear_mae', 'Linear MAE (Mg/ha)')
+    ]
     splits = ['val', 'test']
 
     for idx, split in enumerate(splits):
-        for jdx, metric in enumerate(metrics):
+        for jdx, (metric, label) in enumerate(metrics):
             ax = axes[idx, jdx]
             col = f'{split}_{metric}'
 
@@ -310,8 +326,8 @@ def create_neural_process_plots(df, output_dir):
                        transform=ax.transAxes, verticalalignment='top',
                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-                ax.set_ylabel(metric.upper(), fontweight='bold')
-                ax.set_title(f'{split.capitalize()} {metric.upper()}')
+                ax.set_ylabel(label, fontweight='bold')
+                ax.set_title(f'{split.capitalize()} {label}')
                 ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -324,14 +340,20 @@ def create_baseline_plots(df, output_dir):
     models = df['model'].unique()
     n_models = len(models)
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(2, 5, figsize=(24, 8))
     fig.suptitle('Baseline Models Multi-Seed Results', fontsize=16, fontweight='bold')
 
-    metrics = ['r2', 'rmse', 'mae']
+    metrics = [
+        ('log_r2', 'Log R²'),
+        ('log_rmse', 'Log RMSE'),
+        ('log_mae', 'Log MAE'),
+        ('linear_rmse', 'Linear RMSE (Mg/ha)'),
+        ('linear_mae', 'Linear MAE (Mg/ha)')
+    ]
     splits = ['val', 'test']
 
     for idx, split in enumerate(splits):
-        for jdx, metric in enumerate(metrics):
+        for jdx, (metric, label) in enumerate(metrics):
             ax = axes[idx, jdx]
             col = f'{split}_{metric}'
 
@@ -349,8 +371,8 @@ def create_baseline_plots(df, output_dir):
                     x = np.random.normal(i + 1, 0.04, size=len(model_data))
                     ax.scatter(x, model_data, alpha=0.6, s=30)
 
-                ax.set_ylabel(metric.upper(), fontweight='bold')
-                ax.set_title(f'{split.capitalize()} {metric.upper()}')
+                ax.set_ylabel(label, fontweight='bold')
+                ax.set_title(f'{split.capitalize()} {label}')
                 ax.grid(True, alpha=0.3, axis='y')
                 plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
@@ -363,18 +385,20 @@ def create_comparison_plot(stats_df, output_dir, script_type):
     """Create a comparison plot with error bars showing mean ± std."""
     if script_type == 'train_baselines.py' and 'model' in stats_df.columns:
         # Baseline comparison
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         fig.suptitle('Model Comparison: Mean ± Std Dev (Test Set)',
                      fontsize=16, fontweight='bold')
 
         metrics = [
-            ('test_r2', 'R² Score', True),   # higher is better
-            ('test_rmse', 'RMSE', False),    # lower is better
-            ('test_mae', 'MAE', False),      # lower is better
+            ('test_log_r2', 'Log R²', True),           # higher is better
+            ('test_log_rmse', 'Log RMSE', False),      # lower is better
+            ('test_log_mae', 'Log MAE', False),        # lower is better
+            ('test_linear_rmse', 'Linear RMSE (Mg/ha)', False),  # lower is better
+            ('test_linear_mae', 'Linear MAE (Mg/ha)', False),    # lower is better
         ]
 
         for idx, (metric, label, higher_better) in enumerate(metrics):
-            ax = axes[idx]
+            ax = axes.flat[idx]
 
             if f'{metric}_mean' in stats_df.columns:
                 models = stats_df['model']
@@ -400,8 +424,11 @@ def create_comparison_plot(stats_df, output_dir, script_type):
                 ax.set_title(f'{label} Comparison')
                 ax.grid(True, alpha=0.3, axis='y')
 
-                if metric == 'test_r2':
+                if metric == 'test_log_r2':
                     ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+
+        # Hide the unused subplot (6th position in 2x3 grid)
+        axes.flat[5].axis('off')
 
         plt.tight_layout()
         plt.savefig(output_dir / 'model_comparison.png', dpi=300, bbox_inches='tight')
@@ -409,29 +436,35 @@ def create_comparison_plot(stats_df, output_dir, script_type):
 
     else:
         # Single model (Neural Process)
-        fig, ax = plt.subplots(1, 3, figsize=(18, 5))
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         fig.suptitle('Test Set Performance: Mean ± Std Dev',
                      fontsize=16, fontweight='bold')
 
         metrics = [
-            ('test_r2', 'R² Score'),
-            ('test_rmse', 'RMSE'),
-            ('test_mae', 'MAE'),
+            ('test_log_r2', 'Log R²'),
+            ('test_log_rmse', 'Log RMSE'),
+            ('test_log_mae', 'Log MAE'),
+            ('test_linear_rmse', 'Linear RMSE (Mg/ha)'),
+            ('test_linear_mae', 'Linear MAE (Mg/ha)'),
         ]
 
         for idx, (metric, label) in enumerate(metrics):
+            ax = axes.flat[idx]
             if f'{metric}_mean' in stats_df.columns:
                 mean = stats_df[f'{metric}_mean'].values[0]
                 std = stats_df[f'{metric}_std'].values[0]
 
-                ax[idx].bar([''], [mean], yerr=[std], capsize=10,
-                           color='skyblue', alpha=0.7, error_kw={'linewidth': 2})
-                ax[idx].set_ylabel(label, fontweight='bold')
-                ax[idx].set_title(label)
-                ax[idx].text(0, mean + std + 0.02 * abs(mean),
-                           f'{mean:.4f} ± {std:.4f}',
-                           ha='center', va='bottom', fontsize=12, fontweight='bold')
-                ax[idx].grid(True, alpha=0.3, axis='y')
+                ax.bar([''], [mean], yerr=[std], capsize=10,
+                       color='skyblue', alpha=0.7, error_kw={'linewidth': 2})
+                ax.set_ylabel(label, fontweight='bold')
+                ax.set_title(label)
+                ax.text(0, mean + std + 0.02 * abs(mean),
+                        f'{mean:.4f} ± {std:.4f}',
+                        ha='center', va='bottom', fontsize=12, fontweight='bold')
+                ax.grid(True, alpha=0.3, axis='y')
+
+        # Hide the unused subplot (6th position in 2x3 grid)
+        axes.flat[5].axis('off')
 
         plt.tight_layout()
         plt.savefig(output_dir / 'performance_summary.png', dpi=300, bbox_inches='tight')
@@ -473,12 +506,12 @@ def write_summary_report(df, stats_df, output_dir, script_type, args, total_dura
 
         if script_type == 'train_baselines.py' and 'model' in stats_df.columns:
             f.write("-" * 80 + "\n")
-            f.write("MODEL RANKING (by Test R²)\n")
+            f.write("MODEL RANKING (by Test Log R²)\n")
             f.write("-" * 80 + "\n\n")
-            ranking = stats_df.sort_values('test_r2_mean', ascending=False)
+            ranking = stats_df.sort_values('test_log_r2_mean', ascending=False)
             for i, row in ranking.iterrows():
                 f.write(f"{i+1}. {row['model'].upper()}: "
-                       f"R² = {row['test_r2_mean']:.4f} ± {row['test_r2_std']:.4f}\n")
+                       f"Log R² = {row['test_log_r2_mean']:.4f} ± {row['test_log_r2_std']:.4f}\n")
             f.write("\n")
 
         f.write("-" * 80 + "\n")
@@ -486,17 +519,28 @@ def write_summary_report(df, stats_df, output_dir, script_type, args, total_dura
         f.write("-" * 80 + "\n\n")
 
         if script_type == 'train.py':
-            test_r2_mean = stats_df['test_r2_mean'].values[0]
-            test_r2_std = stats_df['test_r2_std'].values[0]
-            test_rmse_mean = stats_df['test_rmse_mean'].values[0]
-            test_rmse_std = stats_df['test_rmse_std'].values[0]
+            test_log_r2_mean = stats_df['test_log_r2_mean'].values[0]
+            test_log_r2_std = stats_df['test_log_r2_std'].values[0]
+            test_log_rmse_mean = stats_df['test_log_rmse_mean'].values[0]
+            test_log_rmse_std = stats_df['test_log_rmse_std'].values[0]
+            test_log_mae_mean = stats_df['test_log_mae_mean'].values[0]
+            test_log_mae_std = stats_df['test_log_mae_std'].values[0]
+            test_linear_rmse_mean = stats_df['test_linear_rmse_mean'].values[0]
+            test_linear_rmse_std = stats_df['test_linear_rmse_std'].values[0]
+            test_linear_mae_mean = stats_df['test_linear_mae_mean'].values[0]
+            test_linear_mae_std = stats_df['test_linear_mae_std'].values[0]
 
-            f.write(f"Test R² Score: {test_r2_mean:.4f} ± {test_r2_std:.4f}\n")
-            f.write(f"Test RMSE: {test_rmse_mean:.4f} ± {test_rmse_std:.4f}\n")
-            f.write(f"Coefficient of Variation (R²): {(test_r2_std/test_r2_mean)*100:.2f}%\n\n")
+            f.write(f"Log-space metrics (aligned with training):\n")
+            f.write(f"  Test Log R²:    {test_log_r2_mean:.4f} ± {test_log_r2_std:.4f}\n")
+            f.write(f"  Test Log RMSE:  {test_log_rmse_mean:.4f} ± {test_log_rmse_std:.4f}\n")
+            f.write(f"  Test Log MAE:   {test_log_mae_mean:.4f} ± {test_log_mae_std:.4f}\n\n")
+            f.write(f"Linear-space metrics (Mg/ha, for interpretability):\n")
+            f.write(f"  Test RMSE:      {test_linear_rmse_mean:.2f} ± {test_linear_rmse_std:.2f} Mg/ha\n")
+            f.write(f"  Test MAE:       {test_linear_mae_mean:.2f} ± {test_linear_mae_std:.2f} Mg/ha\n\n")
+            f.write(f"Coefficient of Variation (Log R²): {(test_log_r2_std/test_log_r2_mean)*100:.2f}%\n\n")
 
             # Interpret stability
-            cv = (test_r2_std / test_r2_mean) * 100
+            cv = (test_log_r2_std / test_log_r2_mean) * 100
             if cv < 5:
                 f.write("→ Results are very stable across seeds (CV < 5%)\n")
             elif cv < 10:
@@ -507,17 +551,25 @@ def write_summary_report(df, stats_df, output_dir, script_type, args, total_dura
         elif script_type == 'train_baselines.py':
             f.write("Best model per metric (Test Set):\n\n")
 
-            best_r2 = stats_df.loc[stats_df['test_r2_mean'].idxmax()]
-            f.write(f"R² Score: {best_r2['model'].upper()} "
-                   f"({best_r2['test_r2_mean']:.4f} ± {best_r2['test_r2_std']:.4f})\n")
+            best_log_r2 = stats_df.loc[stats_df['test_log_r2_mean'].idxmax()]
+            f.write(f"Log R²: {best_log_r2['model'].upper()} "
+                   f"({best_log_r2['test_log_r2_mean']:.4f} ± {best_log_r2['test_log_r2_std']:.4f})\n")
 
-            best_rmse = stats_df.loc[stats_df['test_rmse_mean'].idxmin()]
-            f.write(f"RMSE: {best_rmse['model'].upper()} "
-                   f"({best_rmse['test_rmse_mean']:.4f} ± {best_rmse['test_rmse_std']:.4f})\n")
+            best_log_rmse = stats_df.loc[stats_df['test_log_rmse_mean'].idxmin()]
+            f.write(f"Log RMSE: {best_log_rmse['model'].upper()} "
+                   f"({best_log_rmse['test_log_rmse_mean']:.4f} ± {best_log_rmse['test_log_rmse_std']:.4f})\n")
 
-            best_mae = stats_df.loc[stats_df['test_mae_mean'].idxmin()]
-            f.write(f"MAE: {best_mae['model'].upper()} "
-                   f"({best_mae['test_mae_mean']:.4f} ± {best_mae['test_mae_std']:.4f})\n")
+            best_log_mae = stats_df.loc[stats_df['test_log_mae_mean'].idxmin()]
+            f.write(f"Log MAE: {best_log_mae['model'].upper()} "
+                   f"({best_log_mae['test_log_mae_mean']:.4f} ± {best_log_mae['test_log_mae_std']:.4f})\n")
+
+            best_linear_rmse = stats_df.loc[stats_df['test_linear_rmse_mean'].idxmin()]
+            f.write(f"Linear RMSE: {best_linear_rmse['model'].upper()} "
+                   f"({best_linear_rmse['test_linear_rmse_mean']:.2f} ± {best_linear_rmse['test_linear_rmse_std']:.2f} Mg/ha)\n")
+
+            best_linear_mae = stats_df.loc[stats_df['test_linear_mae_mean'].idxmin()]
+            f.write(f"Linear MAE: {best_linear_mae['model'].upper()} "
+                   f"({best_linear_mae['test_linear_mae_mean']:.2f} ± {best_linear_mae['test_linear_mae_std']:.2f} Mg/ha)\n")
 
         f.write("\n" + "=" * 80 + "\n")
 
@@ -637,11 +689,16 @@ def main():
     print("KEY RESULTS:")
     print("-" * 80)
     if args.script == 'train.py':
-        print(f"Test R²:   {stats_df['test_r2_mean'].values[0]:.4f} ± {stats_df['test_r2_std'].values[0]:.4f}")
-        print(f"Test RMSE: {stats_df['test_rmse_mean'].values[0]:.4f} ± {stats_df['test_rmse_std'].values[0]:.4f}")
-        print(f"Test MAE:  {stats_df['test_mae_mean'].values[0]:.4f} ± {stats_df['test_mae_std'].values[0]:.4f}")
+        print(f"Test Log R²:        {stats_df['test_log_r2_mean'].values[0]:.4f} ± {stats_df['test_log_r2_std'].values[0]:.4f}")
+        print(f"Test Log RMSE:      {stats_df['test_log_rmse_mean'].values[0]:.4f} ± {stats_df['test_log_rmse_std'].values[0]:.4f}")
+        print(f"Test Log MAE:       {stats_df['test_log_mae_mean'].values[0]:.4f} ± {stats_df['test_log_mae_std'].values[0]:.4f}")
+        print(f"Test Linear RMSE:   {stats_df['test_linear_rmse_mean'].values[0]:.2f} ± {stats_df['test_linear_rmse_std'].values[0]:.2f} Mg/ha")
+        print(f"Test Linear MAE:    {stats_df['test_linear_mae_mean'].values[0]:.2f} ± {stats_df['test_linear_mae_std'].values[0]:.2f} Mg/ha")
     else:
-        print(stats_df[['model', 'test_r2_mean', 'test_r2_std', 'test_rmse_mean', 'test_rmse_std']].to_string(index=False))
+        display_cols = ['model', 'test_log_r2_mean', 'test_log_r2_std', 'test_log_rmse_mean', 'test_log_rmse_std',
+                        'test_log_mae_mean', 'test_log_mae_std', 'test_linear_rmse_mean', 'test_linear_rmse_std',
+                        'test_linear_mae_mean', 'test_linear_mae_std']
+        print(stats_df[display_cols].to_string(index=False))
     print("=" * 80 + "\n")
 
 

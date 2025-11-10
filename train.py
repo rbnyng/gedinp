@@ -469,21 +469,23 @@ def main():
         train_metrics = train_epoch(model, train_loader, optimizer, args.device, kl_weight)
         train_losses.append(train_metrics['loss'])
 
-        # Validate (metrics in log space for model selection aligned with training objective)
+        # Validate (metrics computed in both log and linear space)
         val_losses_dict, val_metrics = validate(
             model, val_loader, args.device, kl_weight,
             agbd_scale=args.agbd_scale,
             log_transform_agbd=args.log_transform_agbd,
-            denormalize_for_reporting=False  # Keep in log space for model selection
+            denormalize_for_reporting=False  # Parameter deprecated but kept for compatibility
         )
         val_losses.append(val_losses_dict['loss'])
 
         print(f"Train Loss: {train_metrics['loss']:.6e} (NLL: {train_metrics['nll']:.6e}, KL: {train_metrics['kl']:.6e})")
         print(f"Val Loss:   {val_losses_dict['loss']:.6e} (NLL: {val_losses_dict['nll']:.6e}, KL: {val_losses_dict['kl']:.6e})")
         if val_metrics:
-            print(f"Val RMSE:   {val_metrics.get('rmse', 0):.4f} (log space)")
-            print(f"Val MAE:    {val_metrics.get('mae', 0):.4f} (log space)")
-            print(f"Val R²:     {val_metrics.get('r2', 0):.4f} (log space)")
+            print(f"Val Log R²:       {val_metrics.get('log_r2', 0):.4f}")
+            print(f"Val Log RMSE:     {val_metrics.get('log_rmse', 0):.4f}")
+            print(f"Val Log MAE:      {val_metrics.get('log_mae', 0):.4f}")
+            print(f"Val Linear RMSE:  {val_metrics.get('linear_rmse', 0):.2f} Mg/ha")
+            print(f"Val Linear MAE:   {val_metrics.get('linear_mae', 0):.2f} Mg/ha")
 
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Learning Rate: {current_lr:.6e}, KL Weight: {kl_weight:.4f}")
@@ -508,7 +510,7 @@ def main():
             epochs_without_improvement += 1
 
         # Save best model based on R² (in log space, aligned with training objective)
-        current_r2 = val_metrics.get('r2', float('-inf')) if val_metrics else float('-inf')
+        current_r2 = val_metrics.get('log_r2', float('-inf')) if val_metrics else float('-inf')
         if current_r2 > best_r2:
             best_r2 = current_r2
             torch.save({
@@ -517,7 +519,7 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': val_losses_dict['loss'],
                 'val_metrics': val_metrics,
-                'r2': current_r2,
+                'log_r2': current_r2
                 'agbd_scale': args.agbd_scale,
                 'log_transform_agbd': args.log_transform_agbd
             }, output_dir / 'best_r2_model.pt')
@@ -551,22 +553,26 @@ def main():
     print(f"Models saved to: {output_dir}")
     print("=" * 80)
 
-    # Evaluate on test set (denormalize to linear space for comparison with baselines)
-    print("\nEvaluating on test set (metrics in linear space for comparison)...")
+    # Evaluate on test set (metrics in both log and linear space)
+    print("\nEvaluating on test set...")
     checkpoint = torch.load(output_dir / 'best_r2_model.pt', map_location=args.device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     test_losses_dict, test_metrics = validate(
         model, test_loader, args.device, kl_weight=1.0,
         agbd_scale=args.agbd_scale,
         log_transform_agbd=args.log_transform_agbd,
-        denormalize_for_reporting=True  # Denormalize for final test reporting
+        denormalize_for_reporting=False  # Parameter deprecated but kept for compatibility
     )
 
-    print(f"Test Loss:  {test_losses_dict['loss']:.6e}")
+    print(f"Test Loss:        {test_losses_dict['loss']:.6e}")
     if test_metrics:
-        print(f"Test RMSE:  {test_metrics.get('rmse', 0):.4f} Mg/ha")
-        print(f"Test MAE:   {test_metrics.get('mae', 0):.4f} Mg/ha")
-        print(f"Test R²:    {test_metrics.get('r2', 0):.4f}")
+        print(f"\nLog-space metrics (aligned with training):")
+        print(f"  Test Log R²:    {test_metrics.get('log_r2', 0):.4f}")
+        print(f"  Test Log RMSE:  {test_metrics.get('log_rmse', 0):.4f}")
+        print(f"  Test Log MAE:   {test_metrics.get('log_mae', 0):.4f}")
+        print(f"\nLinear-space metrics (Mg/ha, for interpretability):")
+        print(f"  Test RMSE:      {test_metrics.get('linear_rmse', 0):.2f} Mg/ha")
+        print(f"  Test MAE:       {test_metrics.get('linear_mae', 0):.2f} Mg/ha")
 
     # Update best model checkpoint with test metrics
     checkpoint['test_metrics'] = test_metrics
