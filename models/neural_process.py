@@ -9,13 +9,13 @@ from typing import Tuple, Optional
 
 # Log-variance bounds (used in Decoder)
 # log_var represents log(variance), so variance = exp(log_var)
-LOG_VAR_MIN = -7.0  # Corresponds to variance ≈ 0.0009 (exp(-7))
-LOG_VAR_MAX = 5.0   # Corresponds to variance ≈ 148.4 (exp(5))
+LOG_VAR_MIN = -7.0
+LOG_VAR_MAX = 7.0
 
 # Log-sigma bounds (used in LatentEncoder)
 # log_sigma represents log(std), so std = exp(log_sigma)
-LOG_SIGMA_MIN = -10.0  # Corresponds to std ≈ 0.000045 (exp(-10))
-LOG_SIGMA_MAX = 2.0    # Corresponds to std ≈ 7.4 (exp(2))
+LOG_SIGMA_MIN = -10.0
+LOG_SIGMA_MAX = 2.0
 
 
 class EmbeddingEncoder(nn.Module):

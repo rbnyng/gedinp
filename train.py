@@ -47,7 +47,7 @@ def parse_args():
                         help='Embedding patch size (default: 3x3)')
     parser.add_argument('--hidden_dim', type=int, default=512,
                         help='Hidden layer dimension')
-    parser.add_argument('--embedding_feature_dim', type=int, default=128,
+    parser.add_argument('--embedding_feature_dim', type=int, default=1024,
                         help='Embedding feature dimension')
     parser.add_argument('--context_repr_dim', type=int, default=256,
                         help='Context representation dimension')
@@ -81,7 +81,7 @@ def parse_args():
                         help='LR scheduler patience (epochs)')
     parser.add_argument('--lr_scheduler_factor', type=float, default=0.5,
                         help='LR scheduler reduction factor')
-    parser.add_argument('--kl_weight_max', type=float, default=1.0,
+    parser.add_argument('--kl_weight_max', type=float, default=0.01,
                         help='Maximum KL weight (for beta-VAE style training)')
     parser.add_argument('--kl_warmup_epochs', type=int, default=10,
                         help='Number of epochs to warm up KL weight from 0 to max')
