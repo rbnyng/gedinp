@@ -319,13 +319,15 @@ def main():
         val_metrics, val_pred, _ = evaluate_model(
             model_rf, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
-        print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
+        print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
+        print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
 
         print("Evaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
             model_rf, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
-        print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
+        print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
+        print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
 
         results['random_forest'] = {
             'train_time': train_time,
@@ -345,13 +347,15 @@ def main():
         val_metrics, val_pred, _ = evaluate_model(
             model_xgb, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
-        print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
+        print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
+        print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
 
         print("Evaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
             model_xgb, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
-        print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
+        print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
+        print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
 
         results['xgboost'] = {
             'train_time': train_time,
@@ -371,13 +375,15 @@ def main():
         val_metrics, val_pred, _ = evaluate_model(
             model_idw, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
-        print(f"Validation - RMSE: {val_metrics['rmse']:.2f}, MAE: {val_metrics['mae']:.2f}, R²: {val_metrics['r2']:.4f}")
+        print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
+        print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
 
         print("Evaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
             model_idw, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
-        print(f"Test - RMSE: {test_metrics['rmse']:.2f}, MAE: {test_metrics['mae']:.2f}, R²: {test_metrics['r2']:.4f}")
+        print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
+        print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
 
         results['idw'] = {
             'train_time': train_time,
