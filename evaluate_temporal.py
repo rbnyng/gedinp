@@ -93,7 +93,8 @@ def main():
             region_bbox=args.region_bbox,
             tile_size=0.1,
             start_time=f"{year}-01-01",
-            end_time=f"{year}-12-31"
+            end_time=f"{year}-12-31",
+            max_agbd=500.0  # Cap at 500 Mg/ha to remove unrealistic outliers
         )
 
         if len(year_df) > 0:

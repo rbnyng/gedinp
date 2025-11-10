@@ -250,7 +250,8 @@ def main():
         region_bbox=args.region_bbox,
         tile_size=0.1,
         start_time=args.start_time,
-        end_time=args.end_time
+        end_time=args.end_time,
+        max_agbd=500.0  # Cap at 500 Mg/ha to remove unrealistic outliers (e.g., 3000+)
     )
     print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
 
