@@ -120,6 +120,58 @@ Well-calibrated uncertainties should have:
    - High predicted std → high actual error
    - Low predicted std → low actual error
 
+## Calibration Metrics Reporting
+
+Training now automatically computes and displays calibration metrics:
+
+### During Training
+
+After each evaluation, you'll see:
+
+```
+Validation - Calibration Metrics:
+  Z-scores: μ = +0.0123 (ideal: 0.0), σ = 0.9876 (ideal: 1.0)
+  Coverage: 1σ = 68.5% (ideal: 68.3%), 2σ = 95.2% (ideal: 95.4%), 3σ = 99.6% (ideal: 99.7%)
+
+Test - Calibration Metrics:
+  Z-scores: μ = -0.0045 (ideal: 0.0), σ = 1.0234 (ideal: 1.0)
+  Coverage: 1σ = 67.8% (ideal: 68.3%), 2σ = 94.9% (ideal: 95.4%), 3σ = 99.5% (ideal: 99.7%)
+```
+
+### Summary Table
+
+At the end of training, a summary table compares all models:
+
+```
+================================================================================
+CALIBRATION SUMMARY (Test Set)
+================================================================================
+Model                Z-score μ    Z-score σ   1σ Cov%   2σ Cov%   3σ Cov%
+                    (ideal: 0)   (ideal: 1)   (68.3%)   (95.4%)   (99.7%)
+--------------------------------------------------------------------------------
+RANDOM_FOREST          -0.0045       1.0234      67.8      94.9      99.5
+XGBOOST                +0.0123       0.9876      68.5      95.2      99.6
+IDW                    +0.1234       1.4567      72.3      96.8      99.8
+================================================================================
+```
+
+### Interpreting Results
+
+**Z-score mean (μ)**:
+- μ ≈ 0: Unbiased (predictions centered on truth)
+- μ > 0: Systematic overestimation
+- μ < 0: Systematic underestimation
+
+**Z-score std (σ)**:
+- σ ≈ 1: Well-calibrated (uncertainties match errors)
+- σ < 1: Over-confident (uncertainties too small)
+- σ > 1: Under-confident (uncertainties too large)
+
+**Coverage**:
+- Close to ideal: Well-calibrated prediction intervals
+- Higher than ideal: Conservative (over-estimates uncertainty)
+- Lower than ideal: Optimistic (under-estimates uncertainty)
+
 ## Implementation Details
 
 ### Numerical Stability
