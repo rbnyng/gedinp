@@ -12,7 +12,7 @@ from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.spatial_cv import SpatialTileSplitter
 from baselines import RandomForestBaseline, XGBoostBaseline, IDWBaseline
-from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
+from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd, compute_agbd_scale
 from utils.evaluation import compute_metrics
 from utils.config import save_config
 
@@ -61,8 +61,15 @@ def parse_args():
                         help='Validation set ratio')
     parser.add_argument('--test_ratio', type=float, default=0.15,
                         help='Test set ratio')
-    parser.add_argument('--agbd_scale', type=float, default=200.0,
-                        help='AGBD scale factor for normalization (default: 200.0 Mg/ha)')
+    parser.add_argument('--agbd_scale', type=float, default=None,
+                        help='AGBD scale factor for normalization. If None and auto_agbd_scale=True, '
+                             'will be computed from training data percentile (default: None)')
+    parser.add_argument('--auto_agbd_scale', action='store_true', default=True,
+                        help='Automatically compute AGBD scale from training data percentile (default: True)')
+    parser.add_argument('--agbd_scale_percentile', type=float, default=99.0,
+                        help='Percentile to use for auto AGBD scale (default: 99.0)')
+    parser.add_argument('--agbd_scale_max_cap', type=float, default=500.0,
+                        help='Maximum cap for auto AGBD scale (default: 500.0 Mg/ha)')
     parser.add_argument('--log_transform_agbd', action='store_true', default=True,
                         help='Apply log transform to AGBD')
 
@@ -278,8 +285,28 @@ def main():
           f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
     print()
 
+    # Compute AGBD scale from training data if auto-scaling is enabled
+    if args.auto_agbd_scale and args.agbd_scale is None:
+        print("Computing AGBD scale from training data...")
+        args.agbd_scale = compute_agbd_scale(
+            train_df['agbd'],
+            percentile=args.agbd_scale_percentile,
+            max_cap=args.agbd_scale_max_cap,
+            default_scale=200.0
+        )
+        print()
+    elif args.agbd_scale is None:
+        # Fallback to default if not auto-scaling and no scale provided
+        args.agbd_scale = 200.0
+        print(f"Using default AGBD scale: {args.agbd_scale} Mg/ha")
+        print()
+    else:
+        print(f"Using provided AGBD scale: {args.agbd_scale} Mg/ha")
+        print()
+
     config = vars(args)
     config['global_bounds'] = list(global_bounds)
+    config['agbd_scale'] = args.agbd_scale
     save_config(config, output_dir / 'config.json')
 
     print("Step 4: Preparing data for baseline models...")
@@ -336,7 +363,11 @@ def main():
         }
 
         with open(output_dir / 'random_forest.pkl', 'wb') as f:
-            pickle.dump(model_rf, f)
+            pickle.dump({
+                'model': model_rf,
+                'agbd_scale': args.agbd_scale,
+                'log_transform_agbd': args.log_transform_agbd
+            }, f)
 
     if 'xgb' in args.models:
         model_xgb, train_time = train_xgboost(
@@ -364,7 +395,11 @@ def main():
         }
 
         with open(output_dir / 'xgboost.pkl', 'wb') as f:
-            pickle.dump(model_xgb, f)
+            pickle.dump({
+                'model': model_xgb,
+                'agbd_scale': args.agbd_scale,
+                'log_transform_agbd': args.log_transform_agbd
+            }, f)
 
     if 'idw' in args.models:
         model_idw, train_time = train_idw(
@@ -392,7 +427,11 @@ def main():
         }
 
         with open(output_dir / 'idw.pkl', 'wb') as f:
-            pickle.dump(model_idw, f)
+            pickle.dump({
+                'model': model_idw,
+                'agbd_scale': args.agbd_scale,
+                'log_transform_agbd': args.log_transform_agbd
+            }, f)
 
     print("\n" + "=" * 80)
     print("SUMMARY OF RESULTS")

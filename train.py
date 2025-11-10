@@ -21,6 +21,7 @@ from models.neural_process import (
 from diagnostics import generate_all_diagnostics
 from utils.evaluation import compute_metrics
 from utils.config import save_config
+from utils.normalization import compute_agbd_scale
 
 
 def parse_args():
@@ -87,8 +88,15 @@ def parse_args():
                         help='Number of epochs to warm up KL weight from 0 to max')
 
     # Dataset arguments
-    parser.add_argument('--agbd_scale', type=float, default=200.0,
-                        help='AGBD scale factor for normalization (default: 200.0 Mg/ha)')
+    parser.add_argument('--agbd_scale', type=float, default=None,
+                        help='AGBD scale factor for normalization. If None and auto_agbd_scale=True, '
+                             'will be computed from training data percentile (default: None)')
+    parser.add_argument('--auto_agbd_scale', action='store_true', default=True,
+                        help='Automatically compute AGBD scale from training data percentile (default: True)')
+    parser.add_argument('--agbd_scale_percentile', type=float, default=99.0,
+                        help='Percentile to use for auto AGBD scale (default: 99.0)')
+    parser.add_argument('--agbd_scale_max_cap', type=float, default=500.0,
+                        help='Maximum cap for auto AGBD scale (default: 500.0 Mg/ha)')
     parser.add_argument('--log_transform_agbd', type=lambda x: x.lower() == 'true', default=True,
                         help='Apply log transform to AGBD')
     parser.add_argument('--augment_coords', action='store_true', default=True,
@@ -331,10 +339,31 @@ def main():
     )
     print(f"Global bounds: lon [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}], "
           f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
+    print()
 
-    # Save global bounds and temporal info to config for future evaluation
+    # Compute AGBD scale from training data if auto-scaling is enabled
+    if args.auto_agbd_scale and args.agbd_scale is None:
+        print("Computing AGBD scale from training data...")
+        args.agbd_scale = compute_agbd_scale(
+            train_df['agbd'],
+            percentile=args.agbd_scale_percentile,
+            max_cap=args.agbd_scale_max_cap,
+            default_scale=200.0
+        )
+        print()
+    elif args.agbd_scale is None:
+        # Fallback to default if not auto-scaling and no scale provided
+        args.agbd_scale = 200.0
+        print(f"Using default AGBD scale: {args.agbd_scale} Mg/ha")
+        print()
+    else:
+        print(f"Using provided AGBD scale: {args.agbd_scale} Mg/ha")
+        print()
+
+    # Save global bounds, AGBD scale, and temporal info to config for future evaluation
     config = vars(args)
     config['global_bounds'] = list(global_bounds)
+    config['agbd_scale'] = args.agbd_scale
     if args.train_years is not None:
         config['train_years'] = args.train_years
     save_config(config, output_dir / 'config.json')
@@ -472,7 +501,9 @@ def main():
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': val_losses_dict['loss'],
-                'val_metrics': val_metrics
+                'val_metrics': val_metrics,
+                'agbd_scale': args.agbd_scale,
+                'log_transform_agbd': args.log_transform_agbd
             }, output_dir / 'best_model.pt')
             print("✓ Saved best model (lowest val loss)")
         else:
@@ -489,6 +520,8 @@ def main():
                 'val_loss': val_losses_dict['loss'],
                 'val_metrics': val_metrics,
                 'log_r2': current_r2
+                'agbd_scale': args.agbd_scale,
+                'log_transform_agbd': args.log_transform_agbd
             }, output_dir / 'best_r2_model.pt')
             print(f"✓ Saved best R² model (log-space R² = {best_r2:.4f})")
 
@@ -502,6 +535,8 @@ def main():
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'agbd_scale': args.agbd_scale,
+                'log_transform_agbd': args.log_transform_agbd
             }, output_dir / f'checkpoint_epoch_{epoch}.pt')
 
     history = {
