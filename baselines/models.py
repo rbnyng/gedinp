@@ -10,6 +10,7 @@ Implements:
 import numpy as np
 from typing import Tuple, Optional
 from sklearn.ensemble import RandomForestRegressor
+from scipy.optimize import minimize_scalar
 import xgboost as xgb
 
 
@@ -59,6 +60,9 @@ class RandomForestBaseline:
             n_jobs=n_jobs,
             random_state=random_state
         )
+
+        # Temperature scaling for uncertainty calibration
+        self.temperature = 1.0
 
     def _prepare_features(
         self,
@@ -129,9 +133,63 @@ class RandomForestBaseline:
 
             # Standard deviation across trees
             std = np.std(tree_predictions, axis=0)
+            # Apply temperature scaling for calibration
+            std = std * self.temperature
             return predictions, std
         else:
             return predictions, None
+
+    def calibrate(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        agbd: np.ndarray,
+        bounds: Tuple[float, float] = (0.1, 10.0)
+    ) -> float:
+        """
+        Calibrate uncertainty estimates using temperature scaling.
+
+        Finds optimal temperature T that minimizes NLL on validation set:
+        NLL = 0.5 * (log(T^2 * sigma^2) + (y - pred)^2 / (T^2 * sigma^2))
+
+        Args:
+            coords: (N, 2) validation coordinates
+            embeddings: (N, H, W, C) validation embeddings
+            agbd: (N,) validation AGBD values (in same space as predictions)
+            bounds: (min, max) bounds for temperature search
+
+        Returns:
+            Optimal temperature value
+        """
+        # Get predictions with uncalibrated std
+        old_temp = self.temperature
+        self.temperature = 1.0  # Temporarily reset to get raw std
+
+        predictions, stds = self.predict(coords, embeddings, return_std=True)
+
+        self.temperature = old_temp  # Restore
+
+        # Define NLL loss as function of temperature
+        def nll_loss(T):
+            if T <= 0:
+                return np.inf
+            calibrated_std = stds * T
+            # Avoid log(0) and division by zero
+            calibrated_var = np.maximum(calibrated_std ** 2, 1e-10)
+            nll = 0.5 * (np.log(calibrated_var) +
+                        (agbd - predictions) ** 2 / calibrated_var)
+            return nll.mean()
+
+        # Optimize temperature
+        result = minimize_scalar(nll_loss, bounds=bounds, method='bounded')
+
+        if result.success:
+            self.temperature = result.x
+            print(f"Calibration successful: T = {self.temperature:.4f}, NLL = {result.fun:.4f}")
+        else:
+            print(f"Warning: Calibration optimization failed. Keeping T = {self.temperature}")
+
+        return self.temperature
 
 
 class XGBoostBaseline:
@@ -190,6 +248,9 @@ class XGBoostBaseline:
         # Quantile models for uncertainty (upper and lower bounds)
         self.model_upper = None
         self.model_lower = None
+
+        # Temperature scaling for uncertainty calibration
+        self.temperature = 1.0
 
     def _prepare_features(
         self,
@@ -293,9 +354,63 @@ class XGBoostBaseline:
             # Approximate std from quantile range
             # For 95% interval, std ≈ (upper - lower) / (2 * 1.96)
             std = (upper - lower) / (2 * 1.96)
+            # Apply temperature scaling for calibration
+            std = std * self.temperature
             return predictions, std
         else:
             return predictions, None
+
+    def calibrate(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        agbd: np.ndarray,
+        bounds: Tuple[float, float] = (0.1, 10.0)
+    ) -> float:
+        """
+        Calibrate uncertainty estimates using temperature scaling.
+
+        Finds optimal temperature T that minimizes NLL on validation set:
+        NLL = 0.5 * (log(T^2 * sigma^2) + (y - pred)^2 / (T^2 * sigma^2))
+
+        Args:
+            coords: (N, 2) validation coordinates
+            embeddings: (N, H, W, C) validation embeddings
+            agbd: (N,) validation AGBD values (in same space as predictions)
+            bounds: (min, max) bounds for temperature search
+
+        Returns:
+            Optimal temperature value
+        """
+        # Get predictions with uncalibrated std
+        old_temp = self.temperature
+        self.temperature = 1.0  # Temporarily reset to get raw std
+
+        predictions, stds = self.predict(coords, embeddings, return_std=True)
+
+        self.temperature = old_temp  # Restore
+
+        # Define NLL loss as function of temperature
+        def nll_loss(T):
+            if T <= 0:
+                return np.inf
+            calibrated_std = stds * T
+            # Avoid log(0) and division by zero
+            calibrated_var = np.maximum(calibrated_std ** 2, 1e-10)
+            nll = 0.5 * (np.log(calibrated_var) +
+                        (agbd - predictions) ** 2 / calibrated_var)
+            return nll.mean()
+
+        # Optimize temperature
+        result = minimize_scalar(nll_loss, bounds=bounds, method='bounded')
+
+        if result.success:
+            self.temperature = result.x
+            print(f"Calibration successful: T = {self.temperature:.4f}, NLL = {result.fun:.4f}")
+        else:
+            print(f"Warning: Calibration optimization failed. Keeping T = {self.temperature}")
+
+        return self.temperature
 
 
 class IDWBaseline:

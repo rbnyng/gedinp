@@ -134,7 +134,8 @@ def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_t
     return metrics, pred, pred_std_norm
 
 
-def train_random_forest(train_coords, train_embeddings, train_agbd, args):
+def train_random_forest(train_coords, train_embeddings, train_agbd, args,
+                        val_coords=None, val_embeddings=None, val_agbd_norm=None):
     print("\n" + "=" * 80)
     print("Training Random Forest Baseline")
     print("=" * 80)
@@ -154,10 +155,16 @@ def train_random_forest(train_coords, train_embeddings, train_agbd, args):
 
     print(f"Training completed in {train_time:.2f} seconds")
 
+    # Calibrate uncertainty on validation set
+    if val_coords is not None and val_embeddings is not None and val_agbd_norm is not None:
+        print("\nCalibrating uncertainty estimates on validation set...")
+        model.calibrate(val_coords, val_embeddings, val_agbd_norm)
+
     return model, train_time
 
 
-def train_xgboost(train_coords, train_embeddings, train_agbd, args):
+def train_xgboost(train_coords, train_embeddings, train_agbd, args,
+                  val_coords=None, val_embeddings=None, val_agbd_norm=None):
     print("\n" + "=" * 80)
     print("Training XGBoost Baseline")
     print("=" * 80)
@@ -178,6 +185,11 @@ def train_xgboost(train_coords, train_embeddings, train_agbd, args):
     train_time = time() - start_time
 
     print(f"Training completed in {train_time:.2f} seconds")
+
+    # Calibrate uncertainty on validation set
+    if val_coords is not None and val_embeddings is not None and val_agbd_norm is not None:
+        print("\nCalibrating uncertainty estimates on validation set...")
+        model.calibrate(val_coords, val_embeddings, val_agbd_norm)
 
     return model, train_time
 
@@ -312,10 +324,11 @@ def main():
 
     if 'rf' in args.models:
         model_rf, train_time = train_random_forest(
-            train_coords, train_embeddings, train_agbd_norm, args
+            train_coords, train_embeddings, train_agbd_norm, args,
+            val_coords, val_embeddings, val_agbd_norm
         )
 
-        print("Evaluating on validation set...")
+        print("\nEvaluating on validation set...")
         val_metrics, val_pred, _ = evaluate_model(
             model_rf, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
@@ -340,10 +353,11 @@ def main():
 
     if 'xgb' in args.models:
         model_xgb, train_time = train_xgboost(
-            train_coords, train_embeddings, train_agbd_norm, args
+            train_coords, train_embeddings, train_agbd_norm, args,
+            val_coords, val_embeddings, val_agbd_norm
         )
 
-        print("Evaluating on validation set...")
+        print("\nEvaluating on validation set...")
         val_metrics, val_pred, _ = evaluate_model(
             model_xgb, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
