@@ -141,6 +141,7 @@ def main():
     eval_dataset = GEDINeuralProcessDataset(
         gedi_df,
         min_shots_per_tile=config.get('min_shots_per_tile', 10),
+        agbd_scale=config.get('agbd_scale', 200.0),
         log_transform_agbd=config.get('log_transform_agbd', True),
         augment_coords=False,  # No augmentation for evaluation
         coord_noise_std=0.0,
