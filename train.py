@@ -519,7 +519,7 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': val_losses_dict['loss'],
                 'val_metrics': val_metrics,
-                'log_r2': current_r2
+                'log_r2': current_r2,
                 'agbd_scale': args.agbd_scale,
                 'log_transform_agbd': args.log_transform_agbd
             }, output_dir / 'best_r2_model.pt')
