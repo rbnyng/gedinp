@@ -4,8 +4,12 @@ Test script for variance calibration in baseline models.
 Creates synthetic data to verify that temperature scaling works correctly.
 """
 
+import sys
 import numpy as np
 from baselines.models import RandomForestBaseline, XGBoostBaseline
+
+# Add parent directory to path for imports
+sys.path.insert(0, '/home/user/gedinp')
 
 
 def test_rf_calibration():
@@ -61,6 +65,16 @@ def test_rf_calibration():
     print(f"\nZ-score statistics:")
     print(f"  Mean: {z_scores.mean():.4f} (ideal: 0.0)")
     print(f"  Std: {z_scores.std():.4f} (ideal: 1.0)")
+
+    # Compute coverage statistics
+    abs_z = np.abs(z_scores)
+    cov_1sigma = np.sum(abs_z <= 1.0) / len(z_scores) * 100
+    cov_2sigma = np.sum(abs_z <= 2.0) / len(z_scores) * 100
+    cov_3sigma = np.sum(abs_z <= 3.0) / len(z_scores) * 100
+    print(f"\nCoverage statistics:")
+    print(f"  1σ: {cov_1sigma:.1f}% (ideal: 68.3%)")
+    print(f"  2σ: {cov_2sigma:.1f}% (ideal: 95.4%)")
+    print(f"  3σ: {cov_3sigma:.1f}% (ideal: 99.7%)")
 
     print("\n✓ Random Forest calibration test passed!")
     return True
@@ -118,6 +132,16 @@ def test_xgb_calibration():
     print(f"\nZ-score statistics:")
     print(f"  Mean: {z_scores.mean():.4f} (ideal: 0.0)")
     print(f"  Std: {z_scores.std():.4f} (ideal: 1.0)")
+
+    # Compute coverage statistics
+    abs_z = np.abs(z_scores)
+    cov_1sigma = np.sum(abs_z <= 1.0) / len(z_scores) * 100
+    cov_2sigma = np.sum(abs_z <= 2.0) / len(z_scores) * 100
+    cov_3sigma = np.sum(abs_z <= 3.0) / len(z_scores) * 100
+    print(f"\nCoverage statistics:")
+    print(f"  1σ: {cov_1sigma:.1f}% (ideal: 68.3%)")
+    print(f"  2σ: {cov_2sigma:.1f}% (ideal: 95.4%)")
+    print(f"  3σ: {cov_3sigma:.1f}% (ideal: 99.7%)")
 
     print("\n✓ XGBoost calibration test passed!")
     return True

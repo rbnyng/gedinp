@@ -15,6 +15,7 @@ from baselines import RandomForestBaseline, XGBoostBaseline, IDWBaseline
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
 from utils.evaluation import compute_metrics
 from utils.config import save_config
+from scipy.stats import norm
 
 
 def parse_args():
@@ -90,6 +91,63 @@ def prepare_data(df, log_transform=True, agbd_scale=200.0):
     return coords, embeddings, agbd
 
 
+def compute_calibration_metrics(predictions, targets, stds):
+    """
+    Compute calibration metrics for uncertainty quantification.
+
+    Args:
+        predictions: (N,) array of predictions (in normalized log space)
+        targets: (N,) array of ground truth (in normalized log space)
+        stds: (N,) array of predicted standard deviations
+
+    Returns:
+        dict with calibration metrics:
+            - z_mean: mean of z-scores (ideal: 0)
+            - z_std: std of z-scores (ideal: 1)
+            - coverage_1sigma: empirical coverage at 1σ (ideal: 68.3%)
+            - coverage_2sigma: empirical coverage at 2σ (ideal: 95.4%)
+            - coverage_3sigma: empirical coverage at 3σ (ideal: 99.7%)
+    """
+    # Compute z-scores (standardized residuals)
+    z_scores = (targets - predictions) / (stds + 1e-8)
+
+    # Z-score statistics
+    z_mean = np.mean(z_scores)
+    z_std = np.std(z_scores)
+
+    # Compute empirical coverage at key confidence levels
+    abs_z = np.abs(z_scores)
+    coverage_1sigma = np.sum(abs_z <= 1.0) / len(z_scores) * 100
+    coverage_2sigma = np.sum(abs_z <= 2.0) / len(z_scores) * 100
+    coverage_3sigma = np.sum(abs_z <= 3.0) / len(z_scores) * 100
+
+    return {
+        'z_mean': z_mean,
+        'z_std': z_std,
+        'coverage_1sigma': coverage_1sigma,
+        'coverage_2sigma': coverage_2sigma,
+        'coverage_3sigma': coverage_3sigma,
+    }
+
+
+def print_calibration_metrics(metrics, prefix=""):
+    """
+    Pretty print calibration metrics.
+
+    Args:
+        metrics: Dict with calibration metrics
+        prefix: Optional prefix for print statements (e.g., "Validation", "Test")
+    """
+    if prefix:
+        prefix = f"{prefix} - "
+
+    print(f"{prefix}Calibration Metrics:")
+    print(f"  Z-scores: μ = {metrics['z_mean']:+.4f} (ideal: 0.0), σ = {metrics['z_std']:.4f} (ideal: 1.0)")
+    print(f"  Coverage: 1σ = {metrics['coverage_1sigma']:.1f}% (ideal: 68.3%), "
+          f"2σ = {metrics['coverage_2sigma']:.1f}% (ideal: 95.4%), "
+          f"3σ = {metrics['coverage_3sigma']:.1f}% (ideal: 99.7%)")
+
+
 def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_transform=True):
     """
     Evaluate baseline model and compute metrics in both log and linear space.
@@ -103,7 +161,7 @@ def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_t
         log_transform: Whether log transform was used (default: True)
 
     Returns:
-        metrics: Dict with log_rmse, log_mae, log_r2, linear_rmse, linear_mae
+        metrics: Dict with log_rmse, log_mae, log_r2, linear_rmse, linear_mae, and calibration metrics
         pred: Predictions in linear space (Mg/ha)
         pred_std_norm: Predicted std in normalized space
     """
@@ -122,6 +180,9 @@ def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_t
     # Compute linear-space metrics
     linear_metrics = compute_metrics(pred, agbd_true)
 
+    # Compute calibration metrics (in normalized log space where model predicts)
+    calibration_metrics = compute_calibration_metrics(pred_norm, agbd_true_norm, pred_std_norm)
+
     # Combine metrics
     metrics = {
         'log_rmse': log_metrics['rmse'],
@@ -129,6 +190,7 @@ def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_t
         'log_r2': log_metrics['r2'],
         'linear_rmse': linear_metrics['rmse'],
         'linear_mae': linear_metrics['mae'],
+        **calibration_metrics  # Add calibration metrics
     }
 
     return metrics, pred, pred_std_norm
@@ -334,13 +396,15 @@ def main():
         )
         print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
         print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(val_metrics, prefix="Validation")
 
-        print("Evaluating on test set...")
+        print("\nEvaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
             model_rf, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
         print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(test_metrics, prefix="Test")
 
         results['random_forest'] = {
             'train_time': train_time,
@@ -363,13 +427,15 @@ def main():
         )
         print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
         print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(val_metrics, prefix="Validation")
 
-        print("Evaluating on test set...")
+        print("\nEvaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
             model_xgb, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
         print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(test_metrics, prefix="Test")
 
         results['xgboost'] = {
             'train_time': train_time,
@@ -385,19 +451,21 @@ def main():
             train_coords, train_embeddings, train_agbd_norm, args
         )
 
-        print("Evaluating on validation set...")
+        print("\nEvaluating on validation set...")
         val_metrics, val_pred, _ = evaluate_model(
             model_idw, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
         print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(val_metrics, prefix="Validation")
 
-        print("Evaluating on test set...")
+        print("\nEvaluating on test set...")
         test_metrics, test_pred, _ = evaluate_model(
             model_idw, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
         )
         print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
         print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(test_metrics, prefix="Test")
 
         results['idw'] = {
             'train_time': train_time,
@@ -433,6 +501,18 @@ def main():
     if summary_table:
         df_summary = pd.DataFrame(summary_table)
         print(df_summary.to_string(index=False))
+
+    # Print calibration summary
+    print("\n" + "=" * 80)
+    print("CALIBRATION SUMMARY (Test Set)")
+    print("=" * 80)
+    print(f"{'Model':<20} {'Z-score μ':>12} {'Z-score σ':>12} {'1σ Cov%':>10} {'2σ Cov%':>10} {'3σ Cov%':>10}")
+    print(f"{'':20} {'(ideal: 0)':>12} {'(ideal: 1)':>12} {'(68.3%)':>10} {'(95.4%)':>10} {'(99.7%)':>10}")
+    print("-" * 80)
+    for model_name, model_results in results.items():
+        m = model_results['test_metrics']
+        print(f"{model_name.upper():<20} {m['z_mean']:>+12.4f} {m['z_std']:>12.4f} "
+              f"{m['coverage_1sigma']:>10.1f} {m['coverage_2sigma']:>10.1f} {m['coverage_3sigma']:>10.1f}")
 
     print("=" * 80)
 
