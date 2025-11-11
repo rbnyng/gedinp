@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
 """
-Training Harness for Multi-Seed Experiments
+Training Harness for Multi-Seed Experiments and Architecture Ablation Studies
 
 This script runs training multiple times with different random seeds to compute
 mean and standard deviation of metrics, providing statistically robust results.
 
+It also supports architecture ablation studies to compare different model variants.
+
 Usage examples:
   # Run Neural Process with 5 seeds
   python run_training_harness.py --script train.py --n_seeds 5 \\
-      --region_bbox -122.5 37.0 -122.0 37.5
+      --region_bbox -122.5 37.0 -122.0 37.5 --output_dir results/multi_seed
 
   # Run baselines with specific seeds
   python run_training_harness.py --script train_baselines.py \\
-      --seeds 42 43 44 45 46 --region_bbox -122.5 37.0 -122.0 37.5
+      --seeds 42 43 44 45 46 --region_bbox -122.5 37.0 -122.0 37.5 \\
+      --output_dir results/baselines
+
+  # Run architecture ablation study (compares all 4 architectures)
+  python run_training_harness.py --script train.py --ablation_mode \\
+      --region_bbox -122.5 37.0 -122.0 37.5 --output_dir results/ablation
+
+  # Run ablation study with multiple seeds and specific architectures
+  python run_training_harness.py --script train.py --ablation_mode \\
+      --seeds 42 43 44 --architectures cnp anp \\
+      --region_bbox -122.5 37.0 -122.0 37.5 --output_dir results/ablation_multi
 """
 
 import argparse
@@ -50,6 +62,12 @@ def parse_args():
                         help='Base output directory for all runs')
     parser.add_argument('--parallel', action='store_true',
                         help='Run seeds in parallel (requires sufficient resources)')
+    parser.add_argument('--ablation_mode', action='store_true',
+                        help='[train.py only] Run architecture ablation study (tests all architectures)')
+    parser.add_argument('--architectures', nargs='+',
+                        default=['cnp', 'deterministic', 'latent', 'anp'],
+                        choices=['cnp', 'deterministic', 'latent', 'anp'],
+                        help='[train.py ablation mode only] Which architectures to test')
 
     # Common training arguments (passed through to training scripts)
     parser.add_argument('--region_bbox', type=float, nargs=4, required=True,
@@ -90,11 +108,18 @@ def parse_args():
 
     args = parser.parse_args()
 
-    # Validate seed specification
-    if args.n_seeds is None and args.seeds is None:
-        parser.error('Must specify either --n_seeds or --seeds')
-    if args.n_seeds is not None and args.seeds is not None:
-        parser.error('Cannot specify both --n_seeds and --seeds')
+    # Validate seed specification (not needed in ablation mode with single seed)
+    if not args.ablation_mode:
+        if args.n_seeds is None and args.seeds is None:
+            parser.error('Must specify either --n_seeds or --seeds')
+        if args.n_seeds is not None and args.seeds is not None:
+            parser.error('Cannot specify both --n_seeds and --seeds')
+    else:
+        # In ablation mode, use single seed if not specified
+        if args.seeds is None and args.n_seeds is None:
+            args.seeds = [args.base_seed]
+        if args.script != 'train.py':
+            parser.error('--ablation_mode only works with --script train.py')
 
     return args
 
@@ -160,7 +185,7 @@ def run_training_single_seed(script, seed, output_subdir, args):
     return output_subdir, duration
 
 
-def collect_results_neural_process(output_subdirs):
+def collect_results_neural_process(output_subdirs, ablation_mode=False):
     """Collect results from Neural Process training runs."""
     results = []
 
@@ -182,10 +207,11 @@ def collect_results_neural_process(output_subdirs):
 
             # Extract metrics
             seed = config['seed']
+            architecture = config.get('architecture_mode', 'unknown')
             val_metrics = checkpoint.get('val_metrics', {})
             test_metrics = checkpoint.get('test_metrics', {})
 
-            results.append({
+            result_dict = {
                 'seed': seed,
                 'output_dir': str(output_dir),
                 'val_log_rmse': val_metrics.get('log_rmse', np.nan),
@@ -210,7 +236,13 @@ def collect_results_neural_process(output_subdirs):
                 'test_coverage_3sigma': test_metrics.get('coverage_3sigma', np.nan),
                 'epoch': checkpoint.get('epoch', -1),
                 'mean_uncertainty': val_metrics.get('mean_uncertainty', np.nan),
-            })
+            }
+
+            # Add architecture column for ablation mode
+            if ablation_mode:
+                result_dict['architecture'] = architecture
+
+            results.append(result_dict)
 
         except Exception as e:
             print(f"Warning: Failed to load results from {output_dir}: {e}")
@@ -495,6 +527,210 @@ def create_comparison_plot(stats_df, output_dir, script_type):
         print(f"Saved summary plot to: {output_dir / 'performance_summary.png'}")
 
 
+def create_ablation_comparison_plots(df, output_dir):
+    """Create architecture comparison plots for ablation study."""
+    # Group by architecture for comparison
+    arch_stats = df.groupby('architecture').agg({
+        'val_log_r2': ['mean', 'std'],
+        'val_log_rmse': ['mean', 'std'],
+        'val_log_mae': ['mean', 'std'],
+        'val_linear_rmse': ['mean', 'std'],
+        'val_linear_mae': ['mean', 'std'],
+        'test_log_r2': ['mean', 'std'],
+        'test_log_rmse': ['mean', 'std'],
+        'test_log_mae': ['mean', 'std'],
+        'test_linear_rmse': ['mean', 'std'],
+        'test_linear_mae': ['mean', 'std'],
+        'mean_uncertainty': ['mean', 'std']
+    }).reset_index()
+
+    # Flatten column names
+    arch_stats.columns = ['_'.join(col).strip('_') for col in arch_stats.columns.values]
+
+    # Sort by test R² (descending)
+    arch_stats = arch_stats.sort_values('test_log_r2_mean', ascending=False)
+
+    # Save to CSV
+    arch_stats.to_csv(output_dir / 'ablation_results.csv', index=False)
+
+    print("\n" + "=" * 80)
+    print("ABLATION STUDY RESULTS")
+    print("=" * 80)
+    print(arch_stats.to_string(index=False))
+    print("=" * 80)
+
+    # Create comparison plot
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig.suptitle('Architecture Ablation Study - Validation vs Test Performance', fontsize=16, fontweight='bold')
+
+    # R² comparison
+    ax = axes[0, 0]
+    x = np.arange(len(arch_stats))
+    width = 0.35
+    ax.bar(x - width/2, arch_stats['val_log_r2_mean'], width,
+           yerr=arch_stats['val_log_r2_std'], label='Validation', alpha=0.8, capsize=5)
+    ax.bar(x + width/2, arch_stats['test_log_r2_mean'], width,
+           yerr=arch_stats['test_log_r2_std'], label='Test', alpha=0.8, capsize=5)
+    ax.set_ylabel('Log R² Score', fontweight='bold')
+    ax.set_title('Log R² Score by Architecture')
+    ax.set_xticks(x)
+    ax.set_xticklabels(arch_stats['architecture'])
+    ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # Log RMSE comparison
+    ax = axes[0, 1]
+    ax.bar(x - width/2, arch_stats['val_log_rmse_mean'], width,
+           yerr=arch_stats['val_log_rmse_std'], label='Validation', alpha=0.8, capsize=5)
+    ax.bar(x + width/2, arch_stats['test_log_rmse_mean'], width,
+           yerr=arch_stats['test_log_rmse_std'], label='Test', alpha=0.8, capsize=5)
+    ax.set_ylabel('Log RMSE', fontweight='bold')
+    ax.set_title('Log RMSE by Architecture')
+    ax.set_xticks(x)
+    ax.set_xticklabels(arch_stats['architecture'])
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # Log MAE comparison
+    ax = axes[0, 2]
+    ax.bar(x - width/2, arch_stats['val_log_mae_mean'], width,
+           yerr=arch_stats['val_log_mae_std'], label='Validation', alpha=0.8, capsize=5)
+    ax.bar(x + width/2, arch_stats['test_log_mae_mean'], width,
+           yerr=arch_stats['test_log_mae_std'], label='Test', alpha=0.8, capsize=5)
+    ax.set_ylabel('Log MAE', fontweight='bold')
+    ax.set_title('Log MAE by Architecture')
+    ax.set_xticks(x)
+    ax.set_xticklabels(arch_stats['architecture'])
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # Test R² only (for clarity)
+    ax = axes[1, 0]
+    colors = sns.color_palette("husl", len(arch_stats))
+    ax.bar(arch_stats['architecture'], arch_stats['test_log_r2_mean'],
+           yerr=arch_stats['test_log_r2_std'], color=colors, capsize=5)
+    ax.set_ylabel('Test Log R² Score', fontweight='bold')
+    ax.set_title('Test Log R² Score (Primary Metric)')
+    ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+    ax.grid(True, alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # Validation vs Test R² scatter
+    ax = axes[1, 1]
+    ax.scatter(arch_stats['val_log_r2_mean'], arch_stats['test_log_r2_mean'],
+               s=100, alpha=0.6, c=colors)
+    for i, arch in enumerate(arch_stats['architecture']):
+        ax.annotate(arch, (arch_stats['val_log_r2_mean'].iloc[i],
+                          arch_stats['test_log_r2_mean'].iloc[i]),
+                   fontsize=8, ha='right', va='bottom')
+    lims = [min(arch_stats['val_log_r2_mean'].min(), arch_stats['test_log_r2_mean'].min()) - 0.05,
+            max(arch_stats['val_log_r2_mean'].max(), arch_stats['test_log_r2_mean'].max()) + 0.05]
+    ax.plot(lims, lims, 'k--', alpha=0.5, label='Val = Test')
+    ax.set_xlabel('Validation Log R²', fontweight='bold')
+    ax.set_ylabel('Test Log R²', fontweight='bold')
+    ax.set_title('Validation vs Test Log R²')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Uncertainty comparison
+    ax = axes[1, 2]
+    ax.bar(arch_stats['architecture'], arch_stats['mean_uncertainty_mean'],
+           yerr=arch_stats['mean_uncertainty_std'], color=colors, capsize=5)
+    ax.set_ylabel('Mean Predicted Uncertainty', fontweight='bold')
+    ax.set_title('Predicted Uncertainty by Architecture')
+    ax.grid(True, alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    plt.tight_layout()
+    plt.savefig(output_dir / 'ablation_comparison.png', dpi=300, bbox_inches='tight')
+    print(f"\nSaved comparison plot to: {output_dir / 'ablation_comparison.png'}")
+
+    return arch_stats
+
+
+def write_ablation_summary(df, arch_stats, output_dir, args):
+    """Write ablation study summary report."""
+    report_path = output_dir / 'ablation_summary.txt'
+
+    with open(report_path, 'w') as f:
+        f.write("=" * 80 + "\n")
+        f.write("ABLATION STUDY SUMMARY\n")
+        f.write("=" * 80 + "\n\n")
+
+        f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Seeds: {df['seed'].unique().tolist()}\n")
+        f.write(f"Number of seeds per architecture: {len(df['seed'].unique())}\n\n")
+
+        f.write("Architecture Variants Tested:\n")
+        f.write("1. CNP: Conditional Neural Process (mean pooling baseline)\n")
+        f.write("2. Deterministic: Attention-based aggregation only\n")
+        f.write("3. Latent: Stochastic latent path only\n")
+        f.write("4. ANP: Full Attentive Neural Process (attention + latent)\n\n")
+
+        f.write("-" * 80 + "\n")
+        f.write("RESULTS (Mean ± Std Dev across seeds)\n")
+        f.write("-" * 80 + "\n\n")
+        f.write(arch_stats.to_string(index=False) + "\n\n")
+
+        best = arch_stats.iloc[0]
+        f.write("-" * 80 + "\n")
+        f.write("BEST ARCHITECTURE (by Test Log R²)\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"Architecture: {best['architecture']}\n\n")
+        f.write(f"Validation Performance:\n")
+        f.write(f"  Log R² Score: {best['val_log_r2_mean']:.4f} ± {best['val_log_r2_std']:.4f}\n")
+        f.write(f"  Log RMSE: {best['val_log_rmse_mean']:.4f} ± {best['val_log_rmse_std']:.4f}\n")
+        f.write(f"  Log MAE: {best['val_log_mae_mean']:.4f} ± {best['val_log_mae_std']:.4f}\n\n")
+        f.write(f"Test Performance:\n")
+        f.write(f"  Log R² Score: {best['test_log_r2_mean']:.4f} ± {best['test_log_r2_std']:.4f}\n")
+        f.write(f"  Log RMSE: {best['test_log_rmse_mean']:.4f} ± {best['test_log_rmse_std']:.4f}\n")
+        f.write(f"  Log MAE: {best['test_log_mae_mean']:.4f} ± {best['test_log_mae_std']:.4f}\n\n")
+
+        # Compare architectures
+        cnp_idx = arch_stats[arch_stats['architecture'] == 'cnp'].index
+        det_idx = arch_stats[arch_stats['architecture'] == 'deterministic'].index
+        lat_idx = arch_stats[arch_stats['architecture'] == 'latent'].index
+        anp_idx = arch_stats[arch_stats['architecture'] == 'anp'].index
+
+        if len(cnp_idx) > 0 and len(det_idx) > 0:
+            cnp_r2 = arch_stats.loc[cnp_idx[0], 'test_log_r2_mean']
+            det_r2 = arch_stats.loc[det_idx[0], 'test_log_r2_mean']
+            improvement = ((det_r2 - cnp_r2) / abs(cnp_r2)) * 100 if cnp_r2 != 0 else 0
+            f.write(f"\n1. Attention vs Mean Pooling:\n")
+            f.write(f"   Deterministic (attention) vs CNP (mean pooling)\n")
+            f.write(f"   Log R² improvement: {improvement:+.2f}%\n")
+
+        if len(det_idx) > 0 and len(lat_idx) > 0:
+            det_r2 = arch_stats.loc[det_idx[0], 'test_log_r2_mean']
+            lat_r2 = arch_stats.loc[lat_idx[0], 'test_log_r2_mean']
+            f.write(f"\n2. Deterministic vs Stochastic:\n")
+            f.write(f"   Deterministic: Log R² = {det_r2:.4f}\n")
+            f.write(f"   Latent: Log R² = {lat_r2:.4f}\n")
+            if det_r2 > lat_r2:
+                f.write(f"   → Attention is more effective than latent path alone\n")
+            else:
+                f.write(f"   → Latent path is more effective than attention alone\n")
+
+        if len(det_idx) > 0 and len(anp_idx) > 0:
+            det_r2 = arch_stats.loc[det_idx[0], 'test_log_r2_mean']
+            anp_r2 = arch_stats.loc[anp_idx[0], 'test_log_r2_mean']
+            improvement = ((anp_r2 - det_r2) / abs(det_r2)) * 100 if det_r2 != 0 else 0
+            f.write(f"\n3. Adding Latent Path to Attention:\n")
+            f.write(f"   Improvement: {improvement:+.2f}%\n")
+            if improvement > 1:
+                f.write(f"   → Latent path provides significant value\n")
+            elif improvement > 0:
+                f.write(f"   → Latent path provides marginal improvement\n")
+            else:
+                f.write(f"   → Latent path does not help (deterministic task)\n")
+
+    print(f"Saved ablation summary to: {report_path}")
+
+
 def write_summary_report(df, stats_df, output_dir, script_type, args, total_duration):
     """Write a comprehensive text summary report."""
     report_path = output_dir / 'harness_summary.txt'
@@ -621,35 +857,75 @@ def main():
         json.dump(harness_config, f, indent=2)
 
     print("\n" + "=" * 80)
-    print("MULTI-SEED TRAINING HARNESS")
-    print("=" * 80)
+    if args.ablation_mode:
+        print("ARCHITECTURE ABLATION STUDY")
+        print("=" * 80)
+        print(f"Architectures: {args.architectures}")
+        print(f"Seeds: {seeds}")
+        print(f"Total runs: {len(args.architectures) * len(seeds)}")
+    else:
+        print("MULTI-SEED TRAINING HARNESS")
+        print("=" * 80)
+        print(f"Seeds: {seeds}")
+        print(f"Number of runs: {len(seeds)}")
     print(f"Script: {args.script}")
-    print(f"Seeds: {seeds}")
-    print(f"Number of runs: {len(seeds)}")
     print(f"Output directory: {output_dir}")
     print("=" * 80 + "\n")
 
-    # Run training for each seed
+    # Run training for each seed (and architecture if ablation mode)
     output_subdirs = []
     durations = []
     start_time_total = datetime.now()
 
-    for i, seed in enumerate(seeds, 1):
-        print(f"\n{'=' * 80}")
-        print(f"RUN {i}/{len(seeds)}: Seed {seed}")
-        print(f"{'=' * 80}\n")
+    if args.ablation_mode:
+        # Ablation mode: iterate over architectures × seeds
+        original_arch_mode = args.architecture_mode
+        run_num = 0
+        total_runs = len(args.architectures) * len(seeds)
 
-        output_subdir = output_dir / f"seed_{seed}"
-        output_subdir.mkdir(parents=True, exist_ok=True)
+        for arch in args.architectures:
+            for seed in seeds:
+                run_num += 1
+                print(f"\n{'=' * 80}")
+                print(f"RUN {run_num}/{total_runs}: {arch.upper()} with seed {seed}")
+                print(f"{'=' * 80}\n")
 
-        result_dir, duration = run_training_single_seed(
-            args.script, seed, output_subdir, args
-        )
-        output_subdirs.append(result_dir)
-        durations.append(duration)
+                output_subdir = output_dir / arch / f"seed_{seed}"
+                output_subdir.mkdir(parents=True, exist_ok=True)
 
-        if result_dir is None:
-            print(f"WARNING: Run with seed={seed} failed. Continuing with remaining seeds...")
+                # Temporarily set architecture for this run
+                args.architecture_mode = arch
+
+                result_dir, duration = run_training_single_seed(
+                    args.script, seed, output_subdir, args
+                )
+                output_subdirs.append(result_dir)
+                durations.append(duration)
+
+                if result_dir is None:
+                    print(f"WARNING: Run with {arch} seed={seed} failed. Continuing...")
+
+        # Restore original architecture mode
+        args.architecture_mode = original_arch_mode
+
+    else:
+        # Normal mode: iterate over seeds only
+        for i, seed in enumerate(seeds, 1):
+            print(f"\n{'=' * 80}")
+            print(f"RUN {i}/{len(seeds)}: Seed {seed}")
+            print(f"{'=' * 80}\n")
+
+            output_subdir = output_dir / f"seed_{seed}"
+            output_subdir.mkdir(parents=True, exist_ok=True)
+
+            result_dir, duration = run_training_single_seed(
+                args.script, seed, output_subdir, args
+            )
+            output_subdirs.append(result_dir)
+            durations.append(duration)
+
+            if result_dir is None:
+                print(f"WARNING: Run with seed={seed} failed. Continuing with remaining seeds...")
 
     end_time_total = datetime.now()
     total_duration = (end_time_total - start_time_total).total_seconds()
@@ -660,8 +936,11 @@ def main():
     print("=" * 80)
 
     if args.script == 'train.py':
-        df = collect_results_neural_process(output_subdirs)
-        stats_df = compute_statistics(df)
+        df = collect_results_neural_process(output_subdirs, ablation_mode=args.ablation_mode)
+        if args.ablation_mode:
+            stats_df = compute_statistics(df, group_by='architecture')
+        else:
+            stats_df = compute_statistics(df)
     elif args.script == 'train_baselines.py':
         df = collect_results_baselines(output_subdirs)
         stats_df = compute_statistics(df, group_by='model')
@@ -683,19 +962,30 @@ def main():
     print("GENERATING VISUALIZATIONS")
     print("=" * 80)
 
-    create_visualizations(df, output_dir, args.script)
-    create_comparison_plot(stats_df, output_dir, args.script)
+    if args.ablation_mode:
+        # Ablation-specific visualizations
+        arch_stats = create_ablation_comparison_plots(df, output_dir)
+    else:
+        # Normal multi-seed visualizations
+        create_visualizations(df, output_dir, args.script)
+        create_comparison_plot(stats_df, output_dir, args.script)
 
     # Write summary report
     print("\n" + "=" * 80)
     print("GENERATING SUMMARY REPORT")
     print("=" * 80)
 
-    write_summary_report(df, stats_df, output_dir, args.script, args, total_duration)
+    if args.ablation_mode:
+        write_ablation_summary(df, arch_stats, output_dir, args)
+    else:
+        write_summary_report(df, stats_df, output_dir, args.script, args, total_duration)
 
     # Print final summary
     print("\n" + "=" * 80)
-    print("MULTI-SEED TRAINING COMPLETE")
+    if args.ablation_mode:
+        print("ABLATION STUDY COMPLETE")
+    else:
+        print("MULTI-SEED TRAINING COMPLETE")
     print("=" * 80)
     print(f"Total time: {total_duration:.1f} seconds ({total_duration/60:.1f} minutes)")
     print(f"Average time per run: {np.mean(durations):.1f} seconds")
@@ -704,15 +994,25 @@ def main():
     print("  - harness_config.json    # Configuration used")
     print("  - all_runs.csv          # All individual run results")
     print("  - statistics.csv        # Aggregated statistics (mean ± std)")
-    print("  - multi_seed_results.png # Box plots and scatter plots")
-    print("  - model_comparison.png  # Comparison with error bars")
-    print("  - harness_summary.txt   # Comprehensive text report")
+    if args.ablation_mode:
+        print("  - ablation_comparison.png # Architecture comparison plots")
+        print("  - ablation_results.csv   # Architecture performance summary")
+        print("  - ablation_summary.txt   # Ablation analysis report")
+    else:
+        print("  - multi_seed_results.png # Box plots and scatter plots")
+        print("  - model_comparison.png  # Comparison with error bars")
+        print("  - harness_summary.txt   # Comprehensive text report")
     print("=" * 80 + "\n")
 
     # Print key statistics
     print("KEY RESULTS:")
     print("-" * 80)
-    if args.script == 'train.py':
+    if args.ablation_mode:
+        display_cols = ['architecture', 'test_log_r2_mean', 'test_log_r2_std',
+                       'test_log_rmse_mean', 'test_log_rmse_std',
+                       'test_log_mae_mean', 'test_log_mae_std']
+        print(arch_stats[display_cols].to_string(index=False))
+    elif args.script == 'train.py':
         print(f"Test Log R²:        {stats_df['test_log_r2_mean'].values[0]:.4f} ± {stats_df['test_log_r2_std'].values[0]:.4f}")
         print(f"Test Log RMSE:      {stats_df['test_log_rmse_mean'].values[0]:.4f} ± {stats_df['test_log_rmse_std'].values[0]:.4f}")
         print(f"Test Log MAE:       {stats_df['test_log_mae_mean'].values[0]:.4f} ± {stats_df['test_log_mae_std'].values[0]:.4f}")
