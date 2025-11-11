@@ -62,6 +62,8 @@ def parse_args():
                         help='Year of GeoTessera embeddings')
     parser.add_argument('--cache_dir', type=str, default='./cache',
                         help='Directory for caching tiles and embeddings')
+    parser.add_argument('--buffer_size', type=float, default=0.5,
+                        help='[train.py only] Buffer size in degrees for spatial CV (~55km at 0.5 deg)')
 
     # Neural Process specific arguments (for train.py)
     parser.add_argument('--architecture_mode', type=str, default='anp',
@@ -134,6 +136,7 @@ def run_training_single_seed(script, seed, output_subdir, args):
             '--batch_size', str(args.batch_size),
             '--lr', str(args.lr),
             '--weight_decay', str(args.weight_decay),
+            '--buffer_size', str(args.buffer_size),
         ])
     elif script == 'train_baselines.py':
         cmd.extend([
