@@ -10,6 +10,7 @@ Implements:
 import numpy as np
 from typing import Tuple, Optional
 from sklearn.ensemble import RandomForestRegressor
+from scipy.optimize import minimize_scalar
 import xgboost as xgb
 
 
@@ -59,6 +60,9 @@ class RandomForestBaseline:
             n_jobs=n_jobs,
             random_state=random_state
         )
+
+        # Temperature scaling for uncertainty calibration
+        self.temperature = 1.0
 
     def _prepare_features(
         self,
@@ -133,7 +137,6 @@ class RandomForestBaseline:
         else:
             return predictions, None
 
-
 class XGBoostBaseline:
     """
     XGBoost baseline for biomass prediction.
@@ -190,6 +193,9 @@ class XGBoostBaseline:
         # Quantile models for uncertainty (upper and lower bounds)
         self.model_upper = None
         self.model_lower = None
+
+        # Temperature scaling for uncertainty calibration
+        self.temperature = 1.0
 
     def _prepare_features(
         self,
