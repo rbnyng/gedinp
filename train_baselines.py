@@ -454,9 +454,9 @@ def main():
     train_df, val_df, test_df = splitter.split()
     print()
 
-    train_df.to_csv(output_dir / 'train_split.csv', index=False)
-    val_df.to_csv(output_dir / 'val_split.csv', index=False)
-    test_df.to_csv(output_dir / 'test_split.csv', index=False)
+    train_df.to_csv(output_dir / 'train_split.csv', index=True)
+    val_df.to_csv(output_dir / 'val_split.csv', index=True)
+    test_df.to_csv(output_dir / 'test_split.csv', index=True)
 
     global_bounds = (
         train_df['longitude'].min(),

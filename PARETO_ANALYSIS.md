@@ -31,6 +31,8 @@ python train_baselines.py \
     --models rf xgb
 ```
 
+**Important**: The Pareto analysis requires CSV splits saved with indices. If you have existing baseline outputs from an older version, you'll need to re-run `train_baselines.py` to regenerate the splits with indices preserved.
+
 ### 2. Run Hyperparameter Sweep
 
 Run the Pareto frontier analysis with a comprehensive hyperparameter sweep:
