@@ -219,7 +219,7 @@ def validate(model, dataloader, device, kl_weight=1.0, agbd_scale=200.0, log_tra
         model=model,
         dataloader=dataloader,
         device=device,
-        max_context_shots=20000,  # No subsampling during training validation
+        max_context_shots=100000,  # Very high limit to avoid subsampling
         max_targets_per_chunk=10000,  # Large chunks for training validation
         compute_loss=True,
         kl_weight=kl_weight,
