@@ -10,11 +10,11 @@ from tqdm import tqdm
 
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
-from data.spatial_cv import SpatialTileSplitter
+from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
 from baselines import RandomForestBaseline, XGBoostBaseline, IDWBaseline
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
 from utils.evaluation import compute_metrics
-from utils.config import save_config
+from utils.config import save_config, _make_serializable
 
 
 def parse_args():
@@ -61,6 +61,8 @@ def parse_args():
                         help='Validation set ratio')
     parser.add_argument('--test_ratio', type=float, default=0.15,
                         help='Test set ratio')
+    parser.add_argument('--buffer_size', type=float, default=0.5,
+                        help='Buffer size in degrees for spatial CV (~55km at 0.5 deg)')
     parser.add_argument('--agbd_scale', type=float, default=200.0,
                         help='AGBD scale factor for normalization (default: 200.0 Mg/ha)')
     parser.add_argument('--log_transform_agbd', action='store_true', default=True,
@@ -255,8 +257,11 @@ def main():
         pickle.dump(gedi_df, f)
 
     # Step 3: Spatial split
-    splitter = SpatialTileSplitter(
+    print("Step 3: Creating spatial train/val/test split...")
+    print(f"Using BufferedSpatialSplitter with buffer_size={args.buffer_size}° (~{args.buffer_size*111:.0f}km)")
+    splitter = BufferedSpatialSplitter(
         gedi_df,
+        buffer_size=args.buffer_size,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         random_state=args.seed
@@ -423,7 +428,7 @@ def main():
     print("=" * 80)
 
     with open(output_dir / 'results.json', 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(_make_serializable(results), f, indent=2)
 
     print(f"\nResults saved to: {output_dir}")
     print("Files:")

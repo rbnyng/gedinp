@@ -14,14 +14,14 @@ from tqdm import tqdm
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from data.spatial_cv import SpatialTileSplitter
+from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
 from models.neural_process import (
     GEDINeuralProcess,
     neural_process_loss,
 )
 from diagnostics import generate_all_diagnostics
 from utils.evaluation import compute_metrics
-from utils.config import save_config
+from utils.config import save_config, _make_serializable
 
 
 def parse_args():
@@ -74,6 +74,8 @@ def parse_args():
                         help='Validation set ratio')
     parser.add_argument('--test_ratio', type=float, default=0.15,
                         help='Test set ratio')
+    parser.add_argument('--buffer_size', type=float, default=0.5,
+                        help='Buffer size in degrees for spatial CV (~55km at 0.5 deg)')
     parser.add_argument('--min_shots_per_tile', type=int, default=10,
                         help='Minimum GEDI shots per tile')
     parser.add_argument('--early_stopping_patience', type=int, default=15,
@@ -308,8 +310,10 @@ def main():
         pickle.dump(gedi_df, f)
 
     print("Step 3: Creating spatial train/val/test split...")
-    splitter = SpatialTileSplitter(
+    print(f"Using BufferedSpatialSplitter with buffer_size={args.buffer_size}° (~{args.buffer_size*111:.0f}km)")
+    splitter = BufferedSpatialSplitter(
         gedi_df,
+        buffer_size=args.buffer_size,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         random_state=args.seed
@@ -561,7 +565,7 @@ def main():
         }
     }
     with open(output_dir / 'results.json', 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(_make_serializable(results), f, indent=2)
     print("✓ Saved results to results.json")
 
     if args.generate_diagnostics:
