@@ -169,7 +169,7 @@ def get_hyperparameter_grid(model_type: str, quick: bool = False) -> List[Dict]:
             n_estimators_list = [50, 100, 200, 500]
         else:
             # Full sweep: ~30 configs
-            max_depths = [2, 3, 4, 6, 8, 10]
+            max_depths = [1, 2, 3, 4, 6, 8, 10, 20]
             n_estimators_list = [50, 100, 200, 500, 1000]
 
         grid = []
@@ -186,7 +186,7 @@ def get_hyperparameter_grid(model_type: str, quick: bool = False) -> List[Dict]:
             n_estimators_list = [50, 100, 200, 500]
         else:
             # Full sweep: ~30 configs
-            max_depths = [2, 3, 4, 6, 8, 10]
+            max_depths = [1, 2, 3, 4, 6, 8, 10, 20]
             n_estimators_list = [50, 100, 200, 500, 1000]
 
         grid = []
