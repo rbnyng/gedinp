@@ -10,7 +10,7 @@ import rasterio
 from rasterio.transform import from_bounds
 from rasterio.crs import CRS
 from scipy.spatial import cKDTree
-
+from typing import Optional
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd, denormalize_std
