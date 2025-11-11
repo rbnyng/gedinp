@@ -63,7 +63,7 @@ def parse_args():
     parser.add_argument('--cache_dir', type=str, default='./cache',
                         help='Directory for caching tiles and embeddings')
     parser.add_argument('--buffer_size', type=float, default=0.5,
-                        help='[train.py only] Buffer size in degrees for spatial CV (~55km at 0.5 deg)')
+                        help='Buffer size in degrees for spatial CV (~55km at 0.5 deg)')
 
     # Neural Process specific arguments (for train.py)
     parser.add_argument('--architecture_mode', type=str, default='anp',
@@ -141,6 +141,7 @@ def run_training_single_seed(script, seed, output_subdir, args):
     elif script == 'train_baselines.py':
         cmd.extend([
             '--models', *args.models,
+            '--buffer_size', str(args.buffer_size),
         ])
 
     # Run training
