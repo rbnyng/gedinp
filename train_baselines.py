@@ -11,7 +11,14 @@ from tqdm import tqdm
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
-from baselines import RandomForestBaseline, XGBoostBaseline, LinearRegressionBaseline, IDWBaseline
+from baselines import (
+    RandomForestBaseline,
+    XGBoostBaseline,
+    LinearRegressionBaseline,
+    IDWBaseline,
+    MLPBaseline,
+    EnsembleMLPBaseline
+)
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
 from utils.evaluation import compute_metrics
 from scipy.stats import norm
@@ -40,8 +47,8 @@ def parse_args():
     # Random Forest arguments
     parser.add_argument('--rf_n_estimators', type=int, default=100,
                         help='Random Forest: number of trees')
-    parser.add_argument('--rf_max_depth', type=int, default=None,
-                        help='Random Forest: maximum tree depth (None=unlimited)')
+    parser.add_argument('--rf_max_depth', type=int, default=6,
+                        help='Random Forest: maximum tree depth')
 
     # XGBoost arguments
     parser.add_argument('--xgb_n_estimators', type=int, default=100,
@@ -56,6 +63,28 @@ def parse_args():
                         help='IDW: power parameter for distance weighting')
     parser.add_argument('--idw_n_neighbors', type=int, default=10,
                         help='IDW: number of nearest neighbors')
+
+    # MLP arguments (for both MC Dropout and Ensemble)
+    parser.add_argument('--mlp_hidden_dims', type=int, nargs='+', default=[1024, 512, 256, 128],
+                        help='MLP: hidden layer dimensions')
+    parser.add_argument('--mlp_dropout_rate', type=float, default=0.3,
+                        help='MLP MC Dropout: dropout rate')
+    parser.add_argument('--mlp_learning_rate', type=float, default=1e-3,
+                        help='MLP: learning rate')
+    parser.add_argument('--mlp_weight_decay', type=float, default=1e-5,
+                        help='MLP MC Dropout: L2 regularization (weight decay)')
+    parser.add_argument('--mlp_ensemble_weight_decay', type=float, default=1e-4,
+                        help='MLP Ensemble: L2 regularization (higher since no dropout)')
+    parser.add_argument('--mlp_batch_size', type=int, default=256,
+                        help='MLP: batch size')
+    parser.add_argument('--mlp_n_epochs', type=int, default=100,
+                        help='MLP: number of training epochs')
+    parser.add_argument('--mlp_mc_samples', type=int, default=100,
+                        help='MLP MC Dropout: number of MC samples for uncertainty')
+    parser.add_argument('--mlp_ensemble_size', type=int, default=5,
+                        help='MLP Ensemble: number of models in ensemble')
+    parser.add_argument('--mlp_ensemble_bootstrap', action='store_true', default=True,
+                        help='MLP Ensemble: use bootstrap sampling for diversity')
 
     # Training arguments
     parser.add_argument('--val_ratio', type=float, default=0.15,
@@ -76,9 +105,10 @@ def parse_args():
     # Other
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
-    parser.add_argument('--models', type=str, nargs='+', default=['rf', 'xgb', 'lr', 'idw'],
-                        choices=['rf', 'xgb', 'lr', 'idw'],
-                        help='Which models to train (default: all)')
+    parser.add_argument('--models', type=str, nargs='+',
+                        default=['rf', 'xgb', 'lr', 'idw'],
+                        choices=['rf', 'xgb', 'lr', 'idw', 'mlp-dropout', 'mlp-ensemble'],
+                        help='Which models to train (default: all except MLPs)')
 
     return parser.parse_args()
 
@@ -287,6 +317,74 @@ def train_idw(train_coords, train_embeddings, train_agbd, args):
 
     start_time = time()
     model.fit(train_coords, train_embeddings, train_agbd)
+    train_time = time() - start_time
+
+    print(f"Training completed in {train_time:.2f} seconds")
+
+    return model, train_time
+
+
+def train_mlp_dropout(train_coords, train_embeddings, train_agbd, args,
+                      val_coords=None, val_embeddings=None, val_agbd_norm=None):
+    print("\n" + "=" * 80)
+    print("Training MLP with MC Dropout Baseline")
+    print("=" * 80)
+
+    model = MLPBaseline(
+        hidden_dims=args.mlp_hidden_dims,
+        dropout_rate=args.mlp_dropout_rate,
+        learning_rate=args.mlp_learning_rate,
+        weight_decay=args.mlp_weight_decay,
+        batch_size=args.mlp_batch_size,
+        n_epochs=args.mlp_n_epochs,
+        mc_samples=args.mlp_mc_samples,
+        random_state=args.seed
+    )
+
+    print(f"hidden_dims: {args.mlp_hidden_dims}")
+    print(f"dropout_rate: {args.mlp_dropout_rate}")
+    print(f"learning_rate: {args.mlp_learning_rate}")
+    print(f"weight_decay: {args.mlp_weight_decay}")
+    print(f"batch_size: {args.mlp_batch_size}")
+    print(f"n_epochs: {args.mlp_n_epochs}")
+    print(f"mc_samples: {args.mlp_mc_samples}")
+
+    start_time = time()
+    model.fit(train_coords, train_embeddings, train_agbd, verbose=True)
+    train_time = time() - start_time
+
+    print(f"Training completed in {train_time:.2f} seconds")
+
+    return model, train_time
+
+
+def train_mlp_ensemble(train_coords, train_embeddings, train_agbd, args,
+                       val_coords=None, val_embeddings=None, val_agbd_norm=None):
+    print("\n" + "=" * 80)
+    print("Training MLP Ensemble Baseline")
+    print("=" * 80)
+
+    model = EnsembleMLPBaseline(
+        n_models=args.mlp_ensemble_size,
+        hidden_dims=args.mlp_hidden_dims,
+        learning_rate=args.mlp_learning_rate,
+        weight_decay=args.mlp_ensemble_weight_decay,
+        batch_size=args.mlp_batch_size,
+        n_epochs=args.mlp_n_epochs,
+        bootstrap=args.mlp_ensemble_bootstrap,
+        random_state=args.seed
+    )
+
+    print(f"n_models: {args.mlp_ensemble_size}")
+    print(f"hidden_dims: {args.mlp_hidden_dims}")
+    print(f"learning_rate: {args.mlp_learning_rate}")
+    print(f"weight_decay: {args.mlp_ensemble_weight_decay}")
+    print(f"bootstrap: {args.mlp_ensemble_bootstrap}")
+    print(f"batch_size: {args.mlp_batch_size}")
+    print(f"n_epochs: {args.mlp_n_epochs}")
+
+    start_time = time()
+    model.fit(train_coords, train_embeddings, train_agbd, verbose=True)
     train_time = time() - start_time
 
     print(f"Training completed in {train_time:.2f} seconds")
@@ -525,6 +623,68 @@ def main():
         with open(output_dir / 'idw.pkl', 'wb') as f:
             pickle.dump(model_idw, f)
 
+    if 'mlp-dropout' in args.models:
+        model_mlp_dropout, train_time = train_mlp_dropout(
+            train_coords, train_embeddings, train_agbd_norm, args,
+            val_coords, val_embeddings, val_agbd_norm
+        )
+
+        print("\nEvaluating on validation set...")
+        val_metrics, val_pred, _ = evaluate_model(
+            model_mlp_dropout, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
+        print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(val_metrics, prefix="Validation")
+
+        print("\nEvaluating on test set...")
+        test_metrics, test_pred, _ = evaluate_model(
+            model_mlp_dropout, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
+        print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(test_metrics, prefix="Test")
+
+        results['mlp_dropout'] = {
+            'train_time': train_time,
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics
+        }
+
+        with open(output_dir / 'mlp_dropout.pkl', 'wb') as f:
+            pickle.dump(model_mlp_dropout, f)
+
+    if 'mlp-ensemble' in args.models:
+        model_mlp_ensemble, train_time = train_mlp_ensemble(
+            train_coords, train_embeddings, train_agbd_norm, args,
+            val_coords, val_embeddings, val_agbd_norm
+        )
+
+        print("\nEvaluating on validation set...")
+        val_metrics, val_pred, _ = evaluate_model(
+            model_mlp_ensemble, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
+        print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(val_metrics, prefix="Validation")
+
+        print("\nEvaluating on test set...")
+        test_metrics, test_pred, _ = evaluate_model(
+            model_mlp_ensemble, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
+        print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(test_metrics, prefix="Test")
+
+        results['mlp_ensemble'] = {
+            'train_time': train_time,
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics
+        }
+
+        with open(output_dir / 'mlp_ensemble.pkl', 'wb') as f:
+            pickle.dump(model_mlp_ensemble, f)
+
     print("\n" + "=" * 80)
     print("SUMMARY OF RESULTS")
     print("=" * 80)
@@ -581,6 +741,10 @@ def main():
             print("  - linear_regression.pkl")
         elif model == 'idw':
             print("  - idw.pkl")
+        elif model == 'mlp-dropout':
+            print("  - mlp_dropout.pkl")
+        elif model == 'mlp-ensemble':
+            print("  - mlp_ensemble.pkl")
     print("=" * 80)
 
 if __name__ == '__main__':
