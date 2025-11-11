@@ -2,6 +2,7 @@ import argparse
 import json
 from pathlib import Path
 import pickle
+from time import time
 
 import torch
 import torch.nn as nn
@@ -13,14 +14,14 @@ from tqdm import tqdm
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from data.spatial_cv import SpatialTileSplitter
+from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
 from models.neural_process import (
     GEDINeuralProcess,
     neural_process_loss,
 )
 from diagnostics import generate_all_diagnostics
 from utils.evaluation import compute_metrics
-from utils.config import save_config
+from utils.config import save_config, _make_serializable
 
 
 def parse_args():
@@ -73,6 +74,8 @@ def parse_args():
                         help='Validation set ratio')
     parser.add_argument('--test_ratio', type=float, default=0.15,
                         help='Test set ratio')
+    parser.add_argument('--buffer_size', type=float, default=0.5,
+                        help='Buffer size in degrees for spatial CV (~55km at 0.5 deg)')
     parser.add_argument('--min_shots_per_tile', type=int, default=10,
                         help='Minimum GEDI shots per tile')
     parser.add_argument('--early_stopping_patience', type=int, default=15,
@@ -307,8 +310,10 @@ def main():
         pickle.dump(gedi_df, f)
 
     print("Step 3: Creating spatial train/val/test split...")
-    splitter = SpatialTileSplitter(
+    print(f"Using BufferedSpatialSplitter with buffer_size={args.buffer_size}° (~{args.buffer_size*111:.0f}km)")
+    splitter = BufferedSpatialSplitter(
         gedi_df,
+        buffer_size=args.buffer_size,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         random_state=args.seed
@@ -426,6 +431,9 @@ def main():
     train_losses = []
     val_losses = []
 
+    # Start training timer
+    training_start_time = time()
+
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
         print("-" * 80)
@@ -504,6 +512,9 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
             }, output_dir / f'checkpoint_epoch_{epoch}.pt')
 
+    # Calculate training time
+    training_time = time() - training_start_time
+
     history = {
         'train_losses': train_losses,
         'val_losses': val_losses
@@ -513,6 +524,7 @@ def main():
 
     print("\n" + "=" * 80)
     print("Training complete!")
+    print(f"Training time: {training_time:.2f} seconds")
     print(f"Best validation loss: {best_val_loss:.6e}")
     print(f"Best R² score (log space): {best_r2:.4f}")
     print(f"Models saved to: {output_dir}")
@@ -543,6 +555,18 @@ def main():
     checkpoint['test_metrics'] = test_metrics
     torch.save(checkpoint, output_dir / 'best_r2_model.pt')
     print("✓ Added test metrics to best model checkpoint")
+
+    # Save results.json for consistency with baseline runs
+    results = {
+        'neural_process': {
+            'train_time': training_time,
+            'val_metrics': checkpoint.get('val_metrics', {}),
+            'test_metrics': test_metrics
+        }
+    }
+    with open(output_dir / 'results.json', 'w') as f:
+        json.dump(_make_serializable(results), f, indent=2)
+    print("✓ Saved results to results.json")
 
     if args.generate_diagnostics:
         print("\nGenerating post-training diagnostics...")
