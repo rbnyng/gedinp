@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
@@ -121,11 +120,13 @@ def parse_args():
 
 
 def set_seed(seed):
-    torch.manual_seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
-
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
     model.train()
