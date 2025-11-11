@@ -140,7 +140,7 @@ def evaluate_model(
     model: torch.nn.Module,
     dataloader: DataLoader,
     device: torch.device,
-    max_context_shots: int = 20000,
+    max_context_shots: int = 100000,
     max_targets_per_chunk: int = 1000,
     compute_loss: bool = False,
     kl_weight: float = 1.0,
@@ -156,7 +156,7 @@ def evaluate_model(
         model: The model to evaluate
         dataloader: DataLoader for the dataset
         device: Device to run evaluation on
-        max_context_shots: Maximum context shots to use (subsample if exceeded)
+        max_context_shots: Maximum context shots to use (subsample if exceeded, default 100000)
         max_targets_per_chunk: Maximum targets to process at once
         compute_loss: If True, also compute and return loss components
         kl_weight: KL weight for loss computation (only used if compute_loss=True)

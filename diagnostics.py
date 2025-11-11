@@ -491,44 +491,46 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
     # 3. Sample predictions (on validation set)
     print("\n[3/4] Generating sample predictions...")
 
-    # Load validation data and model (used by both sections 3 and 4)
+    # Load model and datasets (validation for sample predictions, test for calibration)
     model = None
     val_dataset = None
+    test_dataset = None
 
-    if (model_dir / 'val_split.csv').exists() and (model_dir / 'best_r2_model.pt').exists():
-        # Load validation data from pickle (preserves numpy arrays properly)
-        # The CSV files contain truncated string representations that can't be parsed
-        if (model_dir / 'processed_data.pkl').exists():
-            with open(model_dir / 'processed_data.pkl', 'rb') as f:
-                full_data = pickle.load(f)
+    if (model_dir / 'best_r2_model.pt').exists() and (model_dir / 'processed_data.pkl').exists():
+        with open(model_dir / 'processed_data.pkl', 'rb') as f:
+            full_data = pickle.load(f)
 
-            # Load val split CSV just to get the tile IDs
+        global_bounds = tuple(config['global_bounds'])
+        dataset_kwargs = {
+            'min_shots_per_tile': config.get('min_shots_per_tile', 10),
+            'log_transform_agbd': config.get('log_transform_agbd', True),
+            'augment_coords': False,
+            'coord_noise_std': 0.0,
+            'global_bounds': global_bounds
+        }
+
+        # Load validation dataset for sample predictions
+        if (model_dir / 'val_split.csv').exists():
             val_split_info = pd.read_csv(model_dir / 'val_split.csv')
             val_tile_ids = val_split_info['tile_id'].unique()
-
-            # Filter full data to validation tiles
             val_df = full_data[full_data['tile_id'].isin(val_tile_ids)].copy()
+            val_dataset = GEDINeuralProcessDataset(val_df, **dataset_kwargs)
 
-            global_bounds = tuple(config['global_bounds'])
-            val_dataset = GEDINeuralProcessDataset(
-                val_df,
-                min_shots_per_tile=config.get('min_shots_per_tile', 10),
-                log_transform_agbd=config.get('log_transform_agbd', True),
-                augment_coords=False,
-                coord_noise_std=0.0,
-                global_bounds=global_bounds
-            )
+        # Load test dataset for uncertainty calibration (to match reported metrics)
+        if (model_dir / 'test_split.csv').exists():
+            test_split_info = pd.read_csv(model_dir / 'test_split.csv')
+            test_tile_ids = test_split_info['tile_id'].unique()
+            test_df = full_data[full_data['tile_id'].isin(test_tile_ids)].copy()
+            test_dataset = GEDINeuralProcessDataset(test_df, **dataset_kwargs)
 
-            # Load model
-            model, checkpoint, checkpoint_path = load_model_from_checkpoint(
-                model_dir, device
-            )
-        else:
-            print("  ⚠ processed_data.pkl not found, cannot load validation data")
+        # Load model
+        model, checkpoint, checkpoint_path = load_model_from_checkpoint(
+            model_dir, device
+        )
     else:
         print("  ⚠ Required files not found, skipping")
 
-    # Generate sample predictions if model and dataset are loaded
+    # Generate sample predictions if model and validation dataset are loaded
     if model is not None and val_dataset is not None:
         agbd_scale = config.get('agbd_scale', 200.0)
         plot_sample_predictions(
@@ -537,12 +539,12 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
             agbd_scale=agbd_scale
         )
 
-    # 4. Uncertainty calibration
+    # 4. Uncertainty calibration (on TEST set to match reported metrics)
     print("\n[4/4] Analyzing uncertainty calibration...")
-    if model is not None and val_dataset is not None:
+    if model is not None and test_dataset is not None:
         agbd_scale = config.get('agbd_scale', 200.0)
         plot_uncertainty_calibration(
-            model, val_dataset, device,
+            model, test_dataset, device,
             output_path=model_dir / 'diagnostics_uncertainty_calibration.png',
             agbd_scale=agbd_scale
         )

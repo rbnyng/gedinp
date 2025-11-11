@@ -176,6 +176,7 @@ def main():
 
     predictions, targets, uncertainties, metrics = evaluate_model(
         model, eval_loader, args.device,
+        max_context_shots=100000,  # Very high limit to avoid subsampling
         agbd_scale=config.get('agbd_scale', 200.0),
         log_transform_agbd=config.get('log_transform_agbd', True),
         denormalize_for_reporting=False  # Parameter deprecated but kept for compatibility
