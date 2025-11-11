@@ -71,6 +71,10 @@ def parse_args():
                         help='MLP MC Dropout: dropout rate')
     parser.add_argument('--mlp_learning_rate', type=float, default=1e-3,
                         help='MLP: learning rate')
+    parser.add_argument('--mlp_weight_decay', type=float, default=1e-5,
+                        help='MLP MC Dropout: L2 regularization (weight decay)')
+    parser.add_argument('--mlp_ensemble_weight_decay', type=float, default=1e-4,
+                        help='MLP Ensemble: L2 regularization (higher since no dropout)')
     parser.add_argument('--mlp_batch_size', type=int, default=256,
                         help='MLP: batch size')
     parser.add_argument('--mlp_n_epochs', type=int, default=100,
@@ -79,6 +83,8 @@ def parse_args():
                         help='MLP MC Dropout: number of MC samples for uncertainty')
     parser.add_argument('--mlp_ensemble_size', type=int, default=3,
                         help='MLP Ensemble: number of models in ensemble')
+    parser.add_argument('--mlp_ensemble_bootstrap', action='store_true', default=True,
+                        help='MLP Ensemble: use bootstrap sampling for diversity')
 
     # Training arguments
     parser.add_argument('--val_ratio', type=float, default=0.15,
@@ -328,6 +334,7 @@ def train_mlp_dropout(train_coords, train_embeddings, train_agbd, args,
         hidden_dims=args.mlp_hidden_dims,
         dropout_rate=args.mlp_dropout_rate,
         learning_rate=args.mlp_learning_rate,
+        weight_decay=args.mlp_weight_decay,
         batch_size=args.mlp_batch_size,
         n_epochs=args.mlp_n_epochs,
         mc_samples=args.mlp_mc_samples,
@@ -337,6 +344,7 @@ def train_mlp_dropout(train_coords, train_embeddings, train_agbd, args,
     print(f"hidden_dims: {args.mlp_hidden_dims}")
     print(f"dropout_rate: {args.mlp_dropout_rate}")
     print(f"learning_rate: {args.mlp_learning_rate}")
+    print(f"weight_decay: {args.mlp_weight_decay}")
     print(f"batch_size: {args.mlp_batch_size}")
     print(f"n_epochs: {args.mlp_n_epochs}")
     print(f"mc_samples: {args.mlp_mc_samples}")
@@ -360,14 +368,18 @@ def train_mlp_ensemble(train_coords, train_embeddings, train_agbd, args,
         n_models=args.mlp_ensemble_size,
         hidden_dims=args.mlp_hidden_dims,
         learning_rate=args.mlp_learning_rate,
+        weight_decay=args.mlp_ensemble_weight_decay,
         batch_size=args.mlp_batch_size,
         n_epochs=args.mlp_n_epochs,
+        bootstrap=args.mlp_ensemble_bootstrap,
         random_state=args.seed
     )
 
     print(f"n_models: {args.mlp_ensemble_size}")
     print(f"hidden_dims: {args.mlp_hidden_dims}")
     print(f"learning_rate: {args.mlp_learning_rate}")
+    print(f"weight_decay: {args.mlp_ensemble_weight_decay}")
+    print(f"bootstrap: {args.mlp_ensemble_bootstrap}")
     print(f"batch_size: {args.mlp_batch_size}")
     print(f"n_epochs: {args.mlp_n_epochs}")
 

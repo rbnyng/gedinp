@@ -593,6 +593,7 @@ class MLPBaseline:
         hidden_dims: List[int] = [512, 256, 128],
         dropout_rate: float = 0.1,
         learning_rate: float = 1e-3,
+        weight_decay: float = 1e-5,
         batch_size: int = 256,
         n_epochs: int = 100,
         mc_samples: int = 100,
@@ -606,6 +607,7 @@ class MLPBaseline:
             hidden_dims: List of hidden layer dimensions
             dropout_rate: Dropout rate for MC Dropout
             learning_rate: Learning rate for Adam optimizer
+            weight_decay: L2 regularization strength
             batch_size: Batch size for training
             n_epochs: Number of training epochs
             mc_samples: Number of MC samples for uncertainty estimation
@@ -615,6 +617,7 @@ class MLPBaseline:
         self.hidden_dims = hidden_dims
         self.dropout_rate = dropout_rate
         self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
         self.batch_size = batch_size
         self.n_epochs = n_epochs
         self.mc_samples = mc_samples
@@ -700,7 +703,11 @@ class MLPBaseline:
         ).to(self.device)
 
         # Optimizer and loss
-        optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        optimizer = optim.Adam(
+            self.model.parameters(),
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay
+        )
         criterion = nn.MSELoss()
 
         # Training loop
@@ -784,8 +791,10 @@ class EnsembleMLPBaseline:
         n_models: int = 3,
         hidden_dims: List[int] = [512, 256, 128],
         learning_rate: float = 1e-3,
+        weight_decay: float = 1e-4,
         batch_size: int = 256,
         n_epochs: int = 100,
+        bootstrap: bool = True,
         random_state: int = 42,
         device: Optional[str] = None
     ):
@@ -796,16 +805,20 @@ class EnsembleMLPBaseline:
             n_models: Number of models in ensemble
             hidden_dims: List of hidden layer dimensions
             learning_rate: Learning rate for Adam optimizer
+            weight_decay: L2 regularization strength (higher than MC Dropout since no dropout)
             batch_size: Batch size for training
             n_epochs: Number of training epochs
+            bootstrap: If True, use bootstrap sampling for each ensemble member
             random_state: Base random seed
             device: Device to use ('cuda' or 'cpu', None=auto)
         """
         self.n_models = n_models
         self.hidden_dims = hidden_dims
         self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
         self.batch_size = batch_size
         self.n_epochs = n_epochs
+        self.bootstrap = bootstrap
         self.random_state = random_state
 
         if device is None:
@@ -863,6 +876,7 @@ class EnsembleMLPBaseline:
         # Prepare features
         X_train = self._prepare_features(coords, embeddings)
         y_train = agbd
+        n_samples = X_train.shape[0]
 
         # Train each model with different random seed
         for i in range(self.n_models):
@@ -874,10 +888,23 @@ class EnsembleMLPBaseline:
             torch.manual_seed(model_seed)
             np.random.seed(model_seed)
 
+            # Bootstrap sampling for diversity (if enabled)
+            if self.bootstrap:
+                # Sample with replacement
+                bootstrap_indices = np.random.choice(n_samples, size=n_samples, replace=True)
+                X_train_bootstrap = X_train[bootstrap_indices]
+                y_train_bootstrap = y_train[bootstrap_indices]
+                if verbose:
+                    unique_samples = len(np.unique(bootstrap_indices))
+                    print(f"  Bootstrap: {unique_samples}/{n_samples} unique samples")
+            else:
+                X_train_bootstrap = X_train
+                y_train_bootstrap = y_train
+
             # Create dataset and dataloader
             train_dataset = TensorDataset(
-                torch.FloatTensor(X_train),
-                torch.FloatTensor(y_train).unsqueeze(1)
+                torch.FloatTensor(X_train_bootstrap),
+                torch.FloatTensor(y_train_bootstrap).unsqueeze(1)
             )
             train_loader = DataLoader(
                 train_dataset,
@@ -893,8 +920,12 @@ class EnsembleMLPBaseline:
                 dropout_rate=0.0  # No dropout for ensemble
             ).to(self.device)
 
-            # Optimizer and loss
-            optimizer = optim.Adam(model.parameters(), lr=self.learning_rate)
+            # Optimizer and loss (with L2 regularization via weight_decay)
+            optimizer = optim.Adam(
+                model.parameters(),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay
+            )
             criterion = nn.MSELoss()
 
             # Training loop
