@@ -67,9 +67,9 @@ def parse_args():
     # MLP arguments (for both MC Dropout and Ensemble)
     parser.add_argument('--mlp_hidden_dims', type=int, nargs='+', default=[1024, 512, 256, 128],
                         help='MLP: hidden layer dimensions')
-    parser.add_argument('--mlp_dropout_rate', type=float, default=0.3,
+    parser.add_argument('--mlp_dropout_rate', type=float, default=0.5,
                         help='MLP MC Dropout: dropout rate')
-    parser.add_argument('--mlp_learning_rate', type=float, default=1e-3,
+    parser.add_argument('--mlp_learning_rate', type=float, default=1e-4,
                         help='MLP: learning rate')
     parser.add_argument('--mlp_weight_decay', type=float, default=1e-5,
                         help='MLP MC Dropout: L2 regularization (weight decay)')
