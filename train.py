@@ -21,7 +21,7 @@ from models.neural_process import (
 )
 from diagnostics import generate_all_diagnostics
 from utils.evaluation import compute_metrics
-from utils.config import save_config
+from utils.config import save_config, _make_serializable
 
 
 def parse_args():
@@ -565,7 +565,7 @@ def main():
         }
     }
     with open(output_dir / 'results.json', 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(_make_serializable(results), f, indent=2)
     print("✓ Saved results to results.json")
 
     if args.generate_diagnostics:

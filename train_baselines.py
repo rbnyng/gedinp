@@ -14,7 +14,7 @@ from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
 from baselines import RandomForestBaseline, XGBoostBaseline, IDWBaseline
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
 from utils.evaluation import compute_metrics
-from utils.config import save_config
+from utils.config import save_config, _make_serializable
 
 
 def parse_args():
@@ -428,7 +428,7 @@ def main():
     print("=" * 80)
 
     with open(output_dir / 'results.json', 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(_make_serializable(results), f, indent=2)
 
     print(f"\nResults saved to: {output_dir}")
     print("Files:")
