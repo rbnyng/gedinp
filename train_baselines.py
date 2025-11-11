@@ -217,11 +217,6 @@ def train_random_forest(train_coords, train_embeddings, train_agbd, args,
 
     print(f"Training completed in {train_time:.2f} seconds")
 
-    # Calibrate uncertainty on validation set
-    if val_coords is not None and val_embeddings is not None and val_agbd_norm is not None:
-        print("\nCalibrating uncertainty estimates on validation set...")
-        model.calibrate(val_coords, val_embeddings, val_agbd_norm)
-
     return model, train_time
 
 
@@ -247,11 +242,6 @@ def train_xgboost(train_coords, train_embeddings, train_agbd, args,
     train_time = time() - start_time
 
     print(f"Training completed in {train_time:.2f} seconds")
-
-    # Calibrate uncertainty on validation set
-    if val_coords is not None and val_embeddings is not None and val_agbd_norm is not None:
-        print("\nCalibrating uncertainty estimates on validation set...")
-        model.calibrate(val_coords, val_embeddings, val_agbd_norm)
 
     return model, train_time
 
