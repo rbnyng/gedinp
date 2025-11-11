@@ -11,7 +11,7 @@ from tqdm import tqdm
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
-from baselines import RandomForestBaseline, XGBoostBaseline, IDWBaseline
+from baselines import RandomForestBaseline, XGBoostBaseline, LinearRegressionBaseline, IDWBaseline
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
 from utils.evaluation import compute_metrics
 from scipy.stats import norm
@@ -76,8 +76,8 @@ def parse_args():
     # Other
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
-    parser.add_argument('--models', type=str, nargs='+', default=['rf', 'xgb', 'idw'],
-                        choices=['rf', 'xgb', 'idw'],
+    parser.add_argument('--models', type=str, nargs='+', default=['rf', 'xgb', 'lr', 'idw'],
+                        choices=['rf', 'xgb', 'lr', 'idw'],
                         help='Which models to train (default: all)')
 
     return parser.parse_args()
@@ -238,6 +238,29 @@ def train_xgboost(train_coords, train_embeddings, train_agbd, args,
     print(f"n_estimators: {args.xgb_n_estimators}")
     print(f"max_depth: {args.xgb_max_depth}")
     print(f"learning_rate: {args.xgb_learning_rate}")
+
+    start_time = time()
+    model.fit(train_coords, train_embeddings, train_agbd, fit_quantiles=True)
+    train_time = time() - start_time
+
+    print(f"Training completed in {train_time:.2f} seconds")
+
+    return model, train_time
+
+
+def train_linear_regression(train_coords, train_embeddings, train_agbd, args,
+                            val_coords=None, val_embeddings=None, val_agbd_norm=None):
+    print("\n" + "=" * 80)
+    print("Training Linear Regression Baseline")
+    print("=" * 80)
+
+    model = LinearRegressionBaseline(
+        fit_intercept=True,
+        random_state=args.seed
+    )
+
+    print(f"fit_intercept: True")
+    print(f"uncertainty: residual-based (constant std)")
 
     start_time = time()
     model.fit(train_coords, train_embeddings, train_agbd, fit_quantiles=True)
@@ -441,6 +464,37 @@ def main():
         with open(output_dir / 'xgboost.pkl', 'wb') as f:
             pickle.dump(model_xgb, f)
 
+    if 'lr' in args.models:
+        model_lr, train_time = train_linear_regression(
+            train_coords, train_embeddings, train_agbd_norm, args,
+            val_coords, val_embeddings, val_agbd_norm
+        )
+
+        print("\nEvaluating on validation set...")
+        val_metrics, val_pred, _ = evaluate_model(
+            model_lr, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
+        print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(val_metrics, prefix="Validation")
+
+        print("\nEvaluating on test set...")
+        test_metrics, test_pred, _ = evaluate_model(
+            model_lr, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
+        print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(test_metrics, prefix="Test")
+
+        results['linear_regression'] = {
+            'train_time': train_time,
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics
+        }
+
+        with open(output_dir / 'linear_regression.pkl', 'wb') as f:
+            pickle.dump(model_lr, f)
+
     if 'idw' in args.models:
         model_idw, train_time = train_idw(
             train_coords, train_embeddings, train_agbd_norm, args
@@ -523,6 +577,8 @@ def main():
             print("  - random_forest.pkl")
         elif model == 'xgb':
             print("  - xgboost.pkl")
+        elif model == 'lr':
+            print("  - linear_regression.pkl")
         elif model == 'idw':
             print("  - idw.pkl")
     print("=" * 80)
