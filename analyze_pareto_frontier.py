@@ -349,12 +349,21 @@ def main():
     with open(baseline_dir / 'processed_data.pkl', 'rb') as f:
         gedi_df = pickle.load(f)
 
-    train_df = pd.read_csv(baseline_dir / 'train_split.csv')
-    test_df = pd.read_csv(baseline_dir / 'test_split.csv')
+    train_csv = pd.read_csv(baseline_dir / 'train_split.csv')
+    test_csv = pd.read_csv(baseline_dir / 'test_split.csv')
 
-    # Reconstruct embeddings
-    train_df = gedi_df[gedi_df.index.isin(train_df.index)]
-    test_df = gedi_df[gedi_df.index.isin(test_df.index)]
+    # Reconstruct full dataframes by merging on coordinates (unique identifiers)
+    # This preserves the embedding_patch column which is not in the CSV
+    train_df = gedi_df.merge(
+        train_csv[['longitude', 'latitude', 'agbd']],
+        on=['longitude', 'latitude', 'agbd'],
+        how='inner'
+    )
+    test_df = gedi_df.merge(
+        test_csv[['longitude', 'latitude', 'agbd']],
+        on=['longitude', 'latitude', 'agbd'],
+        how='inner'
+    )
 
     print(f"Loaded {len(train_df)} training samples, {len(test_df)} test samples")
 
@@ -365,8 +374,17 @@ def main():
     agbd_scale = baseline_config['agbd_scale']
     log_transform = baseline_config['log_transform_agbd']
     global_bounds = baseline_config['global_bounds']
+    buffer_size = baseline_config.get('buffer_size', 'unknown')
 
     print(f"AGBD normalization: scale={agbd_scale}, log_transform={log_transform}")
+    print(f"Spatial split buffer: {buffer_size}° (~{float(buffer_size)*111:.0f}km)" if buffer_size != 'unknown' else "Spatial split buffer: unknown")
+
+    # Verify split sizes match CSV files
+    if len(train_df) != len(train_csv):
+        print(f"WARNING: Train split size mismatch! CSV: {len(train_csv)}, Loaded: {len(train_df)}")
+    if len(test_df) != len(test_csv):
+        print(f"WARNING: Test split size mismatch! CSV: {len(test_csv)}, Loaded: {len(test_df)}")
+
     print()
 
     # Prepare data
