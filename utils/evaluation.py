@@ -80,6 +80,62 @@ def compute_metrics(
     return metrics
 
 
+def compute_calibration_metrics(
+    predictions: Union[np.ndarray, torch.Tensor],
+    targets: Union[np.ndarray, torch.Tensor],
+    stds: Union[np.ndarray, torch.Tensor]
+) -> Dict[str, float]:
+    """
+    Compute calibration metrics for uncertainty quantification.
+
+    Args:
+        predictions: Predicted values (numpy array or torch tensor)
+        targets: Ground truth values (numpy array or torch tensor)
+        stds: Predicted standard deviations (numpy array or torch tensor)
+
+    Returns:
+        dict with calibration metrics:
+            - z_mean: mean of z-scores (ideal: 0)
+            - z_std: std of z-scores (ideal: 1)
+            - coverage_1sigma: empirical coverage at 1σ (ideal: 68.3%)
+            - coverage_2sigma: empirical coverage at 2σ (ideal: 95.4%)
+            - coverage_3sigma: empirical coverage at 3σ (ideal: 99.7%)
+    """
+    # Convert to numpy if torch tensors
+    if isinstance(predictions, torch.Tensor):
+        predictions = predictions.detach().cpu().numpy().flatten()
+    if isinstance(targets, torch.Tensor):
+        targets = targets.detach().cpu().numpy().flatten()
+    if isinstance(stds, torch.Tensor):
+        stds = stds.detach().cpu().numpy().flatten()
+
+    # Flatten arrays
+    predictions = predictions.flatten()
+    targets = targets.flatten()
+    stds = stds.flatten()
+
+    # Compute z-scores (standardized residuals)
+    z_scores = (targets - predictions) / (stds + 1e-8)
+
+    # Z-score statistics
+    z_mean = float(np.mean(z_scores))
+    z_std = float(np.std(z_scores))
+
+    # Compute empirical coverage at key confidence levels
+    abs_z = np.abs(z_scores)
+    coverage_1sigma = float(np.sum(abs_z <= 1.0) / len(z_scores) * 100)
+    coverage_2sigma = float(np.sum(abs_z <= 2.0) / len(z_scores) * 100)
+    coverage_3sigma = float(np.sum(abs_z <= 3.0) / len(z_scores) * 100)
+
+    return {
+        'z_mean': z_mean,
+        'z_std': z_std,
+        'coverage_1sigma': coverage_1sigma,
+        'coverage_2sigma': coverage_2sigma,
+        'coverage_3sigma': coverage_3sigma,
+    }
+
+
 def evaluate_model(
     model: torch.nn.Module,
     dataloader: DataLoader,
@@ -261,6 +317,11 @@ def evaluate_model(
     targets_linear = denormalize_agbd(targets, agbd_scale=agbd_scale, log_transform=log_transform_agbd)
     linear_metrics = compute_metrics(predictions_linear, targets_linear)
 
+    # 3. Calibration metrics (in log space where model predicts)
+    calibration_metrics = {}
+    if uncertainties is not None and len(uncertainties) > 0 and np.any(uncertainties > 0):
+        calibration_metrics = compute_calibration_metrics(predictions, targets, uncertainties)
+
     # Combine metrics with clear naming
     final_metrics = {
         'log_rmse': log_metrics['rmse'],
@@ -273,6 +334,10 @@ def evaluate_model(
     # Add uncertainty if available
     if 'mean_uncertainty' in log_metrics:
         final_metrics['mean_uncertainty'] = log_metrics['mean_uncertainty']
+
+    # Add calibration metrics if available
+    if calibration_metrics:
+        final_metrics.update(calibration_metrics)
 
     if compute_loss:
         # Compute average loss components

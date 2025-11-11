@@ -193,11 +193,21 @@ def collect_results_neural_process(output_subdirs):
                 'val_log_r2': val_metrics.get('log_r2', np.nan),
                 'val_linear_rmse': val_metrics.get('linear_rmse', np.nan),
                 'val_linear_mae': val_metrics.get('linear_mae', np.nan),
+                'val_z_mean': val_metrics.get('z_mean', np.nan),
+                'val_z_std': val_metrics.get('z_std', np.nan),
+                'val_coverage_1sigma': val_metrics.get('coverage_1sigma', np.nan),
+                'val_coverage_2sigma': val_metrics.get('coverage_2sigma', np.nan),
+                'val_coverage_3sigma': val_metrics.get('coverage_3sigma', np.nan),
                 'test_log_rmse': test_metrics.get('log_rmse', np.nan),
                 'test_log_mae': test_metrics.get('log_mae', np.nan),
                 'test_log_r2': test_metrics.get('log_r2', np.nan),
                 'test_linear_rmse': test_metrics.get('linear_rmse', np.nan),
                 'test_linear_mae': test_metrics.get('linear_mae', np.nan),
+                'test_z_mean': test_metrics.get('z_mean', np.nan),
+                'test_z_std': test_metrics.get('z_std', np.nan),
+                'test_coverage_1sigma': test_metrics.get('coverage_1sigma', np.nan),
+                'test_coverage_2sigma': test_metrics.get('coverage_2sigma', np.nan),
+                'test_coverage_3sigma': test_metrics.get('coverage_3sigma', np.nan),
                 'epoch': checkpoint.get('epoch', -1),
                 'mean_uncertainty': val_metrics.get('mean_uncertainty', np.nan),
             })
@@ -242,11 +252,21 @@ def collect_results_baselines(output_subdirs):
                     'val_log_r2': val_metrics.get('log_r2', np.nan),
                     'val_linear_rmse': val_metrics.get('linear_rmse', np.nan),
                     'val_linear_mae': val_metrics.get('linear_mae', np.nan),
+                    'val_z_mean': val_metrics.get('z_mean', np.nan),
+                    'val_z_std': val_metrics.get('z_std', np.nan),
+                    'val_coverage_1sigma': val_metrics.get('coverage_1sigma', np.nan),
+                    'val_coverage_2sigma': val_metrics.get('coverage_2sigma', np.nan),
+                    'val_coverage_3sigma': val_metrics.get('coverage_3sigma', np.nan),
                     'test_log_rmse': test_metrics.get('log_rmse', np.nan),
                     'test_log_mae': test_metrics.get('log_mae', np.nan),
                     'test_log_r2': test_metrics.get('log_r2', np.nan),
                     'test_linear_rmse': test_metrics.get('linear_rmse', np.nan),
                     'test_linear_mae': test_metrics.get('linear_mae', np.nan),
+                    'test_z_mean': test_metrics.get('z_mean', np.nan),
+                    'test_z_std': test_metrics.get('z_std', np.nan),
+                    'test_coverage_1sigma': test_metrics.get('coverage_1sigma', np.nan),
+                    'test_coverage_2sigma': test_metrics.get('coverage_2sigma', np.nan),
+                    'test_coverage_3sigma': test_metrics.get('coverage_3sigma', np.nan),
                     'train_time': metrics_dict.get('train_time', np.nan),
                 })
 
@@ -260,7 +280,7 @@ def collect_results_baselines(output_subdirs):
 def compute_statistics(df, group_by=None):
     """Compute mean, std, min, max for metrics."""
     metric_cols = [col for col in df.columns if any(
-        metric in col for metric in ['rmse', 'mae', 'r2', 'uncertainty', 'time']
+        metric in col for metric in ['rmse', 'mae', 'r2', 'uncertainty', 'time', 'z_mean', 'z_std', 'coverage']
     )]
 
     if group_by:
