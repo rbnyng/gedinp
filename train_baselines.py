@@ -260,7 +260,7 @@ def train_linear_regression(train_coords, train_embeddings, train_agbd, args,
     )
 
     print(f"fit_intercept: True")
-    print(f"quantile_alpha: 0.95")
+    print(f"uncertainty: residual-based (constant std)")
 
     start_time = time()
     model.fit(train_coords, train_embeddings, train_agbd, fit_quantiles=True)

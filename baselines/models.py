@@ -11,7 +11,7 @@ Implements:
 import numpy as np
 from typing import Tuple, Optional
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression, QuantileRegressor
+from sklearn.linear_model import LinearRegression
 from scipy.optimize import minimize_scalar
 import xgboost as xgb
 
@@ -311,14 +311,12 @@ class LinearRegressionBaseline:
     Linear Regression baseline for biomass prediction.
 
     Uses flattened embeddings + coordinates as features to predict log(AGBD).
-    Supports quantile regression for uncertainty estimation.
+    Supports residual-based uncertainty estimation (constant std across predictions).
     """
 
     def __init__(
         self,
         fit_intercept: bool = True,
-        quantile_alpha: float = 0.95,
-        n_jobs: int = -1,
         random_state: int = 42
     ):
         """
@@ -326,21 +324,17 @@ class LinearRegressionBaseline:
 
         Args:
             fit_intercept: Whether to calculate the intercept (default: True)
-            quantile_alpha: Alpha for quantile regression (default: 0.95 for 95% interval)
-            n_jobs: Number of parallel jobs for quantile regression
-            random_state: Random seed
+            random_state: Random seed (for consistency with other baselines)
         """
         self.fit_intercept = fit_intercept
-        self.quantile_alpha = quantile_alpha
-        self.n_jobs = n_jobs
         self.random_state = random_state
 
         # Main model (OLS regression)
         self.model = LinearRegression(fit_intercept=fit_intercept)
 
-        # Quantile models for uncertainty (upper and lower bounds)
-        self.model_upper = None
-        self.model_lower = None
+        # Residual-based uncertainty
+        self.residual_std = None
+        self._use_residual_std = False
 
     def _prepare_features(
         self,
@@ -379,29 +373,27 @@ class LinearRegressionBaseline:
             coords: (N, 2) training coordinates
             embeddings: (N, H, W, C) training embeddings
             agbd: (N,) training AGBD values (already log-transformed)
-            fit_quantiles: If True, also fit quantile regression models for uncertainty
+            fit_quantiles: If True, compute residual-based std for uncertainty
         """
         X = self._prepare_features(coords, embeddings)
 
         # Fit main model (OLS)
         self.model.fit(X, agbd)
 
-        # Fit quantile models for uncertainty estimation
+        # Compute residual-based uncertainty (MUCH faster than quantile regression)
         if fit_quantiles:
-            self.model_upper = QuantileRegressor(
-                quantile=self.quantile_alpha,
-                alpha=0.0,  # No regularization
-                solver='highs'
-            )
+            # Get training predictions
+            train_pred = self.model.predict(X)
 
-            self.model_lower = QuantileRegressor(
-                quantile=1.0 - self.quantile_alpha,
-                alpha=0.0,  # No regularization
-                solver='highs'
-            )
+            # Compute residual standard deviation
+            residuals = agbd - train_pred
+            self.residual_std = np.std(residuals)
 
-            self.model_upper.fit(X, agbd)
-            self.model_lower.fit(X, agbd)
+            # Store flag that we're using residual-based uncertainty
+            self._use_residual_std = True
+        else:
+            self.residual_std = None
+            self._use_residual_std = False
 
     def predict(
         self,
@@ -415,23 +407,18 @@ class LinearRegressionBaseline:
         Args:
             coords: (N, 2) query coordinates
             embeddings: (N, H, W, C) query embeddings
-            return_std: If True, return std estimates from quantiles
+            return_std: If True, return std estimates (constant residual-based)
 
         Returns:
             predictions: (N,) predicted AGBD values
-            std: (N,) prediction std (from quantile range) if return_std=True, else None
+            std: (N,) prediction std (constant across all predictions) if return_std=True, else None
         """
         X = self._prepare_features(coords, embeddings)
         predictions = self.model.predict(X)
 
-        if return_std and self.model_upper is not None and self.model_lower is not None:
-            # Predict upper and lower quantiles
-            upper = self.model_upper.predict(X)
-            lower = self.model_lower.predict(X)
-
-            # Approximate std from quantile range
-            # For 95% interval, std ≈ (upper - lower) / (2 * 1.96)
-            std = (upper - lower) / (2 * 1.96)
+        if return_std and self.residual_std is not None:
+            # Return constant std for all predictions (based on training residuals)
+            std = np.full_like(predictions, self.residual_std)
             return predictions, std
         else:
             return predictions, None
