@@ -2,6 +2,7 @@ import argparse
 import json
 from pathlib import Path
 import pickle
+from time import time
 
 import torch
 import torch.nn as nn
@@ -426,6 +427,9 @@ def main():
     train_losses = []
     val_losses = []
 
+    # Start training timer
+    training_start_time = time()
+
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
         print("-" * 80)
@@ -504,6 +508,9 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
             }, output_dir / f'checkpoint_epoch_{epoch}.pt')
 
+    # Calculate training time
+    training_time = time() - training_start_time
+
     history = {
         'train_losses': train_losses,
         'val_losses': val_losses
@@ -513,6 +520,7 @@ def main():
 
     print("\n" + "=" * 80)
     print("Training complete!")
+    print(f"Training time: {training_time:.2f} seconds")
     print(f"Best validation loss: {best_val_loss:.6e}")
     print(f"Best R² score (log space): {best_r2:.4f}")
     print(f"Models saved to: {output_dir}")
@@ -543,6 +551,18 @@ def main():
     checkpoint['test_metrics'] = test_metrics
     torch.save(checkpoint, output_dir / 'best_r2_model.pt')
     print("✓ Added test metrics to best model checkpoint")
+
+    # Save results.json for consistency with baseline runs
+    results = {
+        'neural_process': {
+            'train_time': training_time,
+            'val_metrics': checkpoint.get('val_metrics', {}),
+            'test_metrics': test_metrics
+        }
+    }
+    with open(output_dir / 'results.json', 'w') as f:
+        json.dump(results, f, indent=2)
+    print("✓ Saved results to results.json")
 
     if args.generate_diagnostics:
         print("\nGenerating post-training diagnostics...")
