@@ -4,12 +4,14 @@ Baseline models for GEDI biomass prediction.
 Implements:
 - Random Forest
 - XGBoost
+- Linear Regression
 - Inverse Distance Weighting (IDW)
 """
 
 import numpy as np
 from typing import Tuple, Optional
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression, QuantileRegressor
 from scipy.optimize import minimize_scalar
 import xgboost as xgb
 
@@ -265,6 +267,137 @@ class XGBoostBaseline:
                 random_state=self.random_state,
                 objective='reg:quantileerror',
                 quantile_alpha=1.0 - self.quantile_alpha
+            )
+
+            self.model_upper.fit(X, agbd)
+            self.model_lower.fit(X, agbd)
+
+    def predict(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        return_std: bool = True
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """
+        Predict AGBD values.
+
+        Args:
+            coords: (N, 2) query coordinates
+            embeddings: (N, H, W, C) query embeddings
+            return_std: If True, return std estimates from quantiles
+
+        Returns:
+            predictions: (N,) predicted AGBD values
+            std: (N,) prediction std (from quantile range) if return_std=True, else None
+        """
+        X = self._prepare_features(coords, embeddings)
+        predictions = self.model.predict(X)
+
+        if return_std and self.model_upper is not None and self.model_lower is not None:
+            # Predict upper and lower quantiles
+            upper = self.model_upper.predict(X)
+            lower = self.model_lower.predict(X)
+
+            # Approximate std from quantile range
+            # For 95% interval, std ≈ (upper - lower) / (2 * 1.96)
+            std = (upper - lower) / (2 * 1.96)
+            return predictions, std
+        else:
+            return predictions, None
+
+
+class LinearRegressionBaseline:
+    """
+    Linear Regression baseline for biomass prediction.
+
+    Uses flattened embeddings + coordinates as features to predict log(AGBD).
+    Supports quantile regression for uncertainty estimation.
+    """
+
+    def __init__(
+        self,
+        fit_intercept: bool = True,
+        quantile_alpha: float = 0.95,
+        n_jobs: int = -1,
+        random_state: int = 42
+    ):
+        """
+        Initialize Linear Regression model.
+
+        Args:
+            fit_intercept: Whether to calculate the intercept (default: True)
+            quantile_alpha: Alpha for quantile regression (default: 0.95 for 95% interval)
+            n_jobs: Number of parallel jobs for quantile regression
+            random_state: Random seed
+        """
+        self.fit_intercept = fit_intercept
+        self.quantile_alpha = quantile_alpha
+        self.n_jobs = n_jobs
+        self.random_state = random_state
+
+        # Main model (OLS regression)
+        self.model = LinearRegression(fit_intercept=fit_intercept)
+
+        # Quantile models for uncertainty (upper and lower bounds)
+        self.model_upper = None
+        self.model_lower = None
+
+    def _prepare_features(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray
+    ) -> np.ndarray:
+        """
+        Prepare features for Linear Regression.
+
+        Args:
+            coords: (N, 2) array of [lon, lat]
+            embeddings: (N, H, W, C) array of embedding patches
+
+        Returns:
+            (N, 2 + H*W*C) flattened feature array
+        """
+        # Flatten embeddings
+        n_samples = embeddings.shape[0]
+        embeddings_flat = embeddings.reshape(n_samples, -1)
+
+        # Concatenate coords + embeddings
+        features = np.concatenate([coords, embeddings_flat], axis=1)
+        return features
+
+    def fit(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        agbd: np.ndarray,
+        fit_quantiles: bool = True
+    ):
+        """
+        Train the Linear Regression model.
+
+        Args:
+            coords: (N, 2) training coordinates
+            embeddings: (N, H, W, C) training embeddings
+            agbd: (N,) training AGBD values (already log-transformed)
+            fit_quantiles: If True, also fit quantile regression models for uncertainty
+        """
+        X = self._prepare_features(coords, embeddings)
+
+        # Fit main model (OLS)
+        self.model.fit(X, agbd)
+
+        # Fit quantile models for uncertainty estimation
+        if fit_quantiles:
+            self.model_upper = QuantileRegressor(
+                quantile=self.quantile_alpha,
+                alpha=0.0,  # No regularization
+                solver='highs'
+            )
+
+            self.model_lower = QuantileRegressor(
+                quantile=1.0 - self.quantile_alpha,
+                alpha=0.0,  # No regularization
+                solver='highs'
             )
 
             self.model_upper.fit(X, agbd)
