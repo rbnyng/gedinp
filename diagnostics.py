@@ -235,18 +235,18 @@ def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=Non
                 ax.fill_between(x, pred_sorted - 2*std_sorted, pred_sorted + 2*std_sorted,
                                alpha=0.15, color='red', label='±2σ (95%)')
 
-            # Calculate metrics for this tile
-            rmse = np.sqrt(np.mean((pred_mean_np - target_np) ** 2))
-            mae = np.mean(np.abs(pred_mean_np - target_np))
-            r2 = 1 - np.sum((target_np - pred_mean_np) ** 2) / np.sum((target_np - target_np.mean()) ** 2)
+            # Calculate metrics for this tile in log space (normalized)
+            log_rmse = np.sqrt(np.mean((pred_mean_norm - target_norm) ** 2))
+            log_mae = np.mean(np.abs(pred_mean_norm - target_norm))
+            log_r2 = 1 - np.sum((target_norm - pred_mean_norm) ** 2) / np.sum((target_norm - target_norm.mean()) ** 2)
 
-            # Check calibration: what % of points fall within 1σ and 2σ
-            within_1sigma = np.sum(np.abs(target_np - pred_mean_np) <= pred_std_np) / len(target_np) * 100
-            within_2sigma = np.sum(np.abs(target_np - pred_mean_np) <= 2*pred_std_np) / len(target_np) * 100
+            # Check calibration: what % of points fall within 1σ and 2σ (in log space)
+            within_1sigma = np.sum(np.abs(target_norm - pred_mean_norm) <= pred_std_norm) / len(target_norm) * 100
+            within_2sigma = np.sum(np.abs(target_norm - pred_mean_norm) <= 2*pred_std_norm) / len(target_norm) * 100
 
             ax.set_xlabel('Sample Index (sorted by ground truth)', fontsize=10, fontweight='bold')
             ax.set_ylabel('AGBD (Mg/ha)', fontsize=10, fontweight='bold')
-            ax.set_title(f'Tile {tile_idx} | RMSE: {rmse:.2f}, MAE: {mae:.2f}, R²: {r2:.3f} | '
+            ax.set_title(f'Tile {tile_idx} | Log RMSE: {log_rmse:.3f}, Log MAE: {log_mae:.3f}, Log R²: {log_r2:.3f} | '
                         f'Coverage: {within_1sigma:.0f}% (1σ), {within_2sigma:.0f}% (2σ)',
                         fontsize=11)
             ax.legend(loc='best', fontsize=9)
