@@ -102,8 +102,8 @@ def parse_args():
 
     # Baseline specific arguments (for train_baselines.py)
     parser.add_argument('--models', type=str, nargs='+',
-                        default=['rf', 'xgb', 'idw', 'lr'],
-                        choices=['rf', 'xgb', 'idw', 'lr'],
+                        default=['rf', 'xgb', 'idw', 'lr', 'mlp-dropout', 'mlp-ensemble'],
+                        choices=['rf', 'xgb', 'idw', 'lr', 'mlp-dropout', 'mlp-ensemble'],
                         help='[train_baselines.py only] Which baseline models to train')
 
     args = parser.parse_args()

@@ -47,8 +47,8 @@ def parse_args():
     # Random Forest arguments
     parser.add_argument('--rf_n_estimators', type=int, default=100,
                         help='Random Forest: number of trees')
-    parser.add_argument('--rf_max_depth', type=int, default=None,
-                        help='Random Forest: maximum tree depth (None=unlimited)')
+    parser.add_argument('--rf_max_depth', type=int, default=6,
+                        help='Random Forest: maximum tree depth')
 
     # XGBoost arguments
     parser.add_argument('--xgb_n_estimators', type=int, default=100,
@@ -65,9 +65,9 @@ def parse_args():
                         help='IDW: number of nearest neighbors')
 
     # MLP arguments (for both MC Dropout and Ensemble)
-    parser.add_argument('--mlp_hidden_dims', type=int, nargs='+', default=[512, 256, 128],
+    parser.add_argument('--mlp_hidden_dims', type=int, nargs='+', default=[1024, 512, 256, 128],
                         help='MLP: hidden layer dimensions')
-    parser.add_argument('--mlp_dropout_rate', type=float, default=0.1,
+    parser.add_argument('--mlp_dropout_rate', type=float, default=0.3,
                         help='MLP MC Dropout: dropout rate')
     parser.add_argument('--mlp_learning_rate', type=float, default=1e-3,
                         help='MLP: learning rate')
@@ -81,7 +81,7 @@ def parse_args():
                         help='MLP: number of training epochs')
     parser.add_argument('--mlp_mc_samples', type=int, default=100,
                         help='MLP MC Dropout: number of MC samples for uncertainty')
-    parser.add_argument('--mlp_ensemble_size', type=int, default=3,
+    parser.add_argument('--mlp_ensemble_size', type=int, default=5,
                         help='MLP Ensemble: number of models in ensemble')
     parser.add_argument('--mlp_ensemble_bootstrap', action='store_true', default=True,
                         help='MLP Ensemble: use bootstrap sampling for diversity')
