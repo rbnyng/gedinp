@@ -246,7 +246,7 @@ def run_inference(
     uncertainties_norm = np.concatenate(all_uncertainties)
 
     predictions = denormalize_agbd(predictions_norm)
-    uncertainties = denormalize_std(uncertainties_norm, predictions_norm, simple_transform=True)
+    uncertainties = denormalize_std(uncertainties_norm, predictions_norm, simple_transform=False)
 
     print(f"\nPrediction statistics:")
     print(f"  Mean AGB: {predictions.mean():.2f} Mg/ha")
@@ -338,7 +338,7 @@ def create_visualization(
         origin='lower',
         cmap='YlGn',
         vmin=0,
-        vmax=min(200, np.nanpercentile(predictions, 99))
+        vmax=np.nanmax(predictions)
     )
 
     ax.set_xlabel('Longitude', fontweight='bold')
@@ -357,7 +357,7 @@ def create_visualization(
         origin='lower',
         cmap='Reds',
         vmin=0,
-        vmax=np.nanpercentile(uncertainties, 95)
+        vmax=np.nanmax(uncertainties)
     )
 
     ax.set_xlabel('Longitude', fontweight='bold')
