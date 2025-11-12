@@ -115,7 +115,9 @@ def parse_args():
 
 def prepare_data(df, log_transform=True, agbd_scale=200.0):
     coords = df[['longitude', 'latitude']].values
-    embeddings = np.stack(df['embedding_patch'].values)
+    # Convert lists back to numpy arrays if loaded from Parquet
+    embeddings_list = df['embedding_patch'].values
+    embeddings = np.stack([np.array(x) if isinstance(x, list) else x for x in embeddings_list])
     agbd = df['agbd'].values
 
     agbd = normalize_agbd(agbd, agbd_scale=agbd_scale, log_transform=log_transform)
@@ -454,9 +456,18 @@ def main():
     train_df, val_df, test_df = splitter.split()
     print()
 
-    train_df.to_csv(output_dir / 'train_split.csv', index=True)
-    val_df.to_csv(output_dir / 'val_split.csv', index=True)
-    test_df.to_csv(output_dir / 'test_split.csv', index=True)
+    # Save splits as Parquet to preserve embedding vectors
+    # Convert numpy arrays to lists for Parquet compatibility
+    def prepare_for_parquet(df):
+        df_copy = df.copy()
+        df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(lambda x: x.tolist() if x is not None else None)
+        return df_copy
+
+    prepare_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=True)
+    prepare_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=True)
+    prepare_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=True)
+
+    print(f"Saved splits to Parquet files with embeddings preserved")
 
     global_bounds = (
         train_df['longitude'].min(),

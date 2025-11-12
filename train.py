@@ -322,9 +322,18 @@ def main():
     train_df, val_df, test_df = splitter.split()
     print()
 
-    train_df.to_csv(output_dir / 'train_split.csv', index=False)
-    val_df.to_csv(output_dir / 'val_split.csv', index=False)
-    test_df.to_csv(output_dir / 'test_split.csv', index=False)
+    # Save splits as Parquet to preserve embedding vectors
+    # Convert numpy arrays to lists for Parquet compatibility
+    def prepare_for_parquet(df):
+        df_copy = df.copy()
+        df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(lambda x: x.tolist() if x is not None else None)
+        return df_copy
+
+    prepare_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=False)
+    prepare_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=False)
+    prepare_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=False)
+
+    print(f"Saved splits to Parquet files with embeddings preserved")
 
     # Compute global coordinate bounds from training data
     # This ensures consistent normalization across train/val/test sets

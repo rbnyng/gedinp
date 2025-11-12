@@ -345,21 +345,16 @@ def main():
     # Load data splits from baseline training
     baseline_dir = Path(args.baseline_dir)
 
-    print("Step 1: Loading processed data and splits...")
-    with open(baseline_dir / 'processed_data.pkl', 'rb') as f:
-        gedi_df = pickle.load(f)
+    print("Step 1: Loading data splits from Parquet files...")
+    # Load Parquet files which include embedding vectors
+    train_df = pd.read_parquet(baseline_dir / 'train_split.parquet')
+    test_df = pd.read_parquet(baseline_dir / 'test_split.parquet')
 
-    # Load CSV splits with index column
-    # NOTE: Requires train_baselines.py to save with index=True
-    train_csv = pd.read_csv(baseline_dir / 'train_split.csv', index_col=0)
-    test_csv = pd.read_csv(baseline_dir / 'test_split.csv', index_col=0)
+    # Convert embedding lists back to numpy arrays
+    train_df['embedding_patch'] = train_df['embedding_patch'].apply(lambda x: np.array(x) if isinstance(x, list) else x)
+    test_df['embedding_patch'] = test_df['embedding_patch'].apply(lambda x: np.array(x) if isinstance(x, list) else x)
 
-    # Reconstruct full dataframes using index-based matching
-    # This preserves the embedding_patch column and ensures exact split reproduction
-    train_df = gedi_df.loc[train_csv.index]
-    test_df = gedi_df.loc[test_csv.index]
-
-    print(f"Loaded {len(train_df)} training samples, {len(test_df)} test samples")
+    print(f"Loaded {len(train_df)} training samples, {len(test_df)} test samples with embeddings")
 
     # Load config for normalization parameters
     with open(baseline_dir / 'config.json', 'r') as f:
@@ -378,6 +373,7 @@ def main():
     print("Step 2: Preparing features...")
 
     train_coords = train_df[['longitude', 'latitude']].values
+    # Embeddings are already converted to numpy arrays above
     train_embeddings = np.stack(train_df['embedding_patch'].values)
     train_agbd = train_df['agbd'].values
     train_agbd_norm = normalize_agbd(train_agbd, agbd_scale=agbd_scale, log_transform=log_transform)
