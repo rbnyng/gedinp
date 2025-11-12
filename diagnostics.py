@@ -57,20 +57,26 @@ def plot_learning_curves(history_path, output_path):
     print(f"✓ Saved learning curves to: {output_path}")
 
 
-def plot_spatial_splits(train_csv, val_csv, test_csv, output_path):
+def plot_spatial_splits(train_file, val_file, test_file, output_path):
     """
     Visualize spatial distribution of train/val/test GEDI shots.
 
     Args:
-        train_csv: Path to train_split.csv
-        val_csv: Path to val_split.csv
-        test_csv: Path to test_split.csv
+        train_file: Path to train_split.parquet (or .csv for backward compatibility)
+        val_file: Path to val_split.parquet (or .csv for backward compatibility)
+        test_file: Path to test_split.parquet (or .csv for backward compatibility)
         output_path: Path to save the plot
     """
-    # Load splits
-    train_df = pd.read_csv(train_csv)
-    val_df = pd.read_csv(val_csv)
-    test_df = pd.read_csv(test_csv)
+    # Load splits (supports both Parquet and CSV for backward compatibility)
+    def load_split(file_path):
+        if file_path.suffix == '.parquet':
+            return pd.read_parquet(file_path)
+        else:
+            return pd.read_csv(file_path)
+
+    train_df = load_split(train_file)
+    val_df = load_split(val_file)
+    test_df = load_split(test_file)
 
     # Get tile statistics
     def get_tile_info(df, split_name):
@@ -478,15 +484,29 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
 
     # 2. Spatial splits
     print("\n[2/4] Visualizing spatial tile splits...")
-    if all((model_dir / f'{split}_split.csv').exists() for split in ['train', 'val', 'test']):
+    # Try Parquet first, fall back to CSV for backward compatibility
+    split_files_exist = all((model_dir / f'{split}_split.parquet').exists() for split in ['train', 'val', 'test'])
+    if not split_files_exist:
+        split_files_exist = all((model_dir / f'{split}_split.csv').exists() for split in ['train', 'val', 'test'])
+        if split_files_exist:
+            # Use CSV files
+            plot_spatial_splits(
+                model_dir / 'train_split.csv',
+                model_dir / 'val_split.csv',
+                model_dir / 'test_split.csv',
+                model_dir / 'diagnostics_spatial_splits.png'
+            )
+    else:
+        # Use Parquet files
         plot_spatial_splits(
-            model_dir / 'train_split.csv',
-            model_dir / 'val_split.csv',
-            model_dir / 'test_split.csv',
+            model_dir / 'train_split.parquet',
+            model_dir / 'val_split.parquet',
+            model_dir / 'test_split.parquet',
             model_dir / 'diagnostics_spatial_splits.png'
         )
-    else:
-        print("  ⚠ Split CSV files not found, skipping")
+
+    if not split_files_exist:
+        print("  ⚠ Split files not found (neither .parquet nor .csv), skipping")
 
     # 3. Sample predictions (on validation set)
     print("\n[3/4] Generating sample predictions...")
@@ -510,15 +530,19 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
         }
 
         # Load validation dataset for sample predictions
-        if (model_dir / 'val_split.csv').exists():
-            val_split_info = pd.read_csv(model_dir / 'val_split.csv')
+        # Try Parquet first, fall back to CSV for backward compatibility
+        val_split_path = model_dir / 'val_split.parquet' if (model_dir / 'val_split.parquet').exists() else model_dir / 'val_split.csv'
+        if val_split_path.exists():
+            val_split_info = pd.read_parquet(val_split_path) if val_split_path.suffix == '.parquet' else pd.read_csv(val_split_path)
             val_tile_ids = val_split_info['tile_id'].unique()
             val_df = full_data[full_data['tile_id'].isin(val_tile_ids)].copy()
             val_dataset = GEDINeuralProcessDataset(val_df, **dataset_kwargs)
 
         # Load test dataset for uncertainty calibration (to match reported metrics)
-        if (model_dir / 'test_split.csv').exists():
-            test_split_info = pd.read_csv(model_dir / 'test_split.csv')
+        # Try Parquet first, fall back to CSV for backward compatibility
+        test_split_path = model_dir / 'test_split.parquet' if (model_dir / 'test_split.parquet').exists() else model_dir / 'test_split.csv'
+        if test_split_path.exists():
+            test_split_info = pd.read_parquet(test_split_path) if test_split_path.suffix == '.parquet' else pd.read_csv(test_split_path)
             test_tile_ids = test_split_info['tile_id'].unique()
             test_df = full_data[full_data['tile_id'].isin(test_tile_ids)].copy()
             test_dataset = GEDINeuralProcessDataset(test_df, **dataset_kwargs)
