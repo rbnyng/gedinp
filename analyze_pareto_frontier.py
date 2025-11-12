@@ -350,20 +350,7 @@ def main():
     train_df = pd.read_parquet(baseline_dir / 'train_split.parquet')
     test_df = pd.read_parquet(baseline_dir / 'test_split.parquet')
 
-    # Convert embedding lists back to numpy arrays with proper dtype
-    # Parquet stores them as nested lists/arrays, need to convert back to proper numpy arrays
-    def list_to_array(x):
-        if x is None:
-            return None
-        # Use np.array() which handles both lists and object arrays containing nested data
-        return np.array(x, dtype=np.float32)
-
-    train_df['embedding_patch'] = train_df['embedding_patch'].apply(list_to_array)
-    test_df['embedding_patch'] = test_df['embedding_patch'].apply(list_to_array)
-
-    print(f"Loaded {len(train_df)} training samples, {len(test_df)} test samples with embeddings")
-
-    # Load config for normalization parameters
+    # Load config for normalization parameters and patch size
     with open(baseline_dir / 'config.json', 'r') as f:
         baseline_config = json.load(f)
 
@@ -371,6 +358,22 @@ def main():
     log_transform = baseline_config['log_transform_agbd']
     global_bounds = baseline_config['global_bounds']
     buffer_size = baseline_config.get('buffer_size', 'unknown')
+    patch_size = baseline_config.get('patch_size', 3)
+    embedding_dim = 128  # GeoTessera embedding dimension
+
+    # Convert flattened embedding lists back to reshaped numpy arrays
+    # Parquet stores them as flattened 1D lists to avoid nested structure issues
+    def list_to_array(x, patch_size=patch_size, embedding_dim=embedding_dim):
+        if x is None:
+            return None
+        # Convert flattened list to array and reshape to (H, W, C)
+        arr = np.array(x, dtype=np.float32)
+        return arr.reshape(patch_size, patch_size, embedding_dim)
+
+    train_df['embedding_patch'] = train_df['embedding_patch'].apply(list_to_array)
+    test_df['embedding_patch'] = test_df['embedding_patch'].apply(list_to_array)
+
+    print(f"Loaded {len(train_df)} training samples, {len(test_df)} test samples with embeddings")
 
     print(f"AGBD normalization: scale={agbd_scale}, log_transform={log_transform}")
     print(f"Spatial split buffer: {buffer_size}° (~{float(buffer_size)*111:.0f}km)" if buffer_size != 'unknown' else "Spatial split buffer: unknown")
