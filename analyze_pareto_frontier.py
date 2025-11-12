@@ -351,14 +351,12 @@ def main():
     test_df = pd.read_parquet(baseline_dir / 'test_split.parquet')
 
     # Convert embedding lists back to numpy arrays with proper dtype
-    # Parquet stores them as nested lists, need to convert back to numpy arrays
+    # Parquet stores them as nested lists/arrays, need to convert back to proper numpy arrays
     def list_to_array(x):
-        if isinstance(x, list):
-            return np.array(x, dtype=np.float32)
-        elif isinstance(x, np.ndarray):
-            return x.astype(np.float32)
-        else:
-            return x
+        if x is None:
+            return None
+        # Use np.array() which handles both lists and object arrays containing nested data
+        return np.array(x, dtype=np.float32)
 
     train_df['embedding_patch'] = train_df['embedding_patch'].apply(list_to_array)
     test_df['embedding_patch'] = test_df['embedding_patch'].apply(list_to_array)
