@@ -117,7 +117,7 @@ def prepare_data(df, log_transform=True, agbd_scale=200.0):
     coords = df[['longitude', 'latitude']].values
     # Convert lists back to numpy arrays if loaded from Parquet
     embeddings_list = df['embedding_patch'].values
-    embeddings = np.stack([np.array(x) if isinstance(x, list) else x for x in embeddings_list])
+    embeddings = np.stack([np.array(x, dtype=np.float32) if isinstance(x, list) else x for x in embeddings_list])
     agbd = df['agbd'].values
 
     agbd = normalize_agbd(agbd, agbd_scale=agbd_scale, log_transform=log_transform)

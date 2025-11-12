@@ -350,9 +350,18 @@ def main():
     train_df = pd.read_parquet(baseline_dir / 'train_split.parquet')
     test_df = pd.read_parquet(baseline_dir / 'test_split.parquet')
 
-    # Convert embedding lists back to numpy arrays
-    train_df['embedding_patch'] = train_df['embedding_patch'].apply(lambda x: np.array(x) if isinstance(x, list) else x)
-    test_df['embedding_patch'] = test_df['embedding_patch'].apply(lambda x: np.array(x) if isinstance(x, list) else x)
+    # Convert embedding lists back to numpy arrays with proper dtype
+    # Parquet stores them as nested lists, need to convert back to numpy arrays
+    def list_to_array(x):
+        if isinstance(x, list):
+            return np.array(x, dtype=np.float32)
+        elif isinstance(x, np.ndarray):
+            return x.astype(np.float32)
+        else:
+            return x
+
+    train_df['embedding_patch'] = train_df['embedding_patch'].apply(list_to_array)
+    test_df['embedding_patch'] = test_df['embedding_patch'].apply(list_to_array)
 
     print(f"Loaded {len(train_df)} training samples, {len(test_df)} test samples with embeddings")
 
