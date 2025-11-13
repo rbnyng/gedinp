@@ -63,7 +63,7 @@ def parse_args():
     parser.add_argument('--idw_n_neighbors', type=int, default=10,
                         help='IDW: number of nearest neighbors')
 
-    # MLP arguments (for both MC Dropout and Ensemble)
+    # MLP arguments
     parser.add_argument('--mlp_hidden_dims', type=int, nargs='+', default=[1024, 512, 256, 128],
                         help='MLP: hidden layer dimensions')
     parser.add_argument('--mlp_dropout_rate', type=float, default=0.5,
@@ -72,18 +72,12 @@ def parse_args():
                         help='MLP: learning rate')
     parser.add_argument('--mlp_weight_decay', type=float, default=1e-5,
                         help='MLP MC Dropout: L2 regularization (weight decay)')
-    parser.add_argument('--mlp_ensemble_weight_decay', type=float, default=1e-4,
-                        help='MLP Ensemble: L2 regularization (higher since no dropout)')
     parser.add_argument('--mlp_batch_size', type=int, default=256,
                         help='MLP: batch size')
     parser.add_argument('--mlp_n_epochs', type=int, default=100,
                         help='MLP: number of training epochs')
     parser.add_argument('--mlp_mc_samples', type=int, default=100,
                         help='MLP MC Dropout: number of MC samples for uncertainty')
-    parser.add_argument('--mlp_ensemble_size', type=int, default=5,
-                        help='MLP Ensemble: number of models in ensemble')
-    parser.add_argument('--mlp_ensemble_bootstrap', action='store_true', default=True,
-                        help='MLP Ensemble: use bootstrap sampling for diversity')
 
     # Training arguments
     parser.add_argument('--val_ratio', type=float, default=0.15,
@@ -106,7 +100,7 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--models', type=str, nargs='+',
                         default=['rf', 'xgb', 'idw'],
-                        choices=['rf', 'xgb', 'idw', 'mlp-dropout', 'mlp-ensemble'],
+                        choices=['rf', 'xgb', 'idw', 'mlp-dropout'],
                         help='Which models to train (default: rf, xgb, idw)')
 
     return parser.parse_args()
