@@ -13,7 +13,6 @@ Implements:
 import numpy as np
 from typing import Tuple, Optional, List
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
 from scipy.optimize import minimize_scalar
 import xgboost as xgb
 import torch
@@ -312,124 +311,6 @@ class XGBoostBaseline:
             return predictions, None
 
 
-class LinearRegressionBaseline:
-    """
-    Linear Regression baseline for biomass prediction.
-
-    Uses flattened embeddings + coordinates as features to predict log(AGBD).
-    Supports residual-based uncertainty estimation (constant std across predictions).
-    """
-
-    def __init__(
-        self,
-        fit_intercept: bool = True,
-        random_state: int = 42
-    ):
-        """
-        Initialize Linear Regression model.
-
-        Args:
-            fit_intercept: Whether to calculate the intercept (default: True)
-            random_state: Random seed (for consistency with other baselines)
-        """
-        self.fit_intercept = fit_intercept
-        self.random_state = random_state
-
-        # Main model (OLS regression)
-        self.model = LinearRegression(fit_intercept=fit_intercept)
-
-        # Residual-based uncertainty
-        self.residual_std = None
-        self._use_residual_std = False
-
-    def _prepare_features(
-        self,
-        coords: np.ndarray,
-        embeddings: np.ndarray
-    ) -> np.ndarray:
-        """
-        Prepare features for Linear Regression.
-
-        Args:
-            coords: (N, 2) array of [lon, lat]
-            embeddings: (N, H, W, C) array of embedding patches
-
-        Returns:
-            (N, 2 + H*W*C) flattened feature array
-        """
-        # Flatten embeddings
-        n_samples = embeddings.shape[0]
-        embeddings_flat = embeddings.reshape(n_samples, -1)
-
-        # Concatenate coords + embeddings
-        features = np.concatenate([coords, embeddings_flat], axis=1)
-        return features
-
-    def fit(
-        self,
-        coords: np.ndarray,
-        embeddings: np.ndarray,
-        agbd: np.ndarray,
-        fit_quantiles: bool = True
-    ):
-        """
-        Train the Linear Regression model.
-
-        Args:
-            coords: (N, 2) training coordinates
-            embeddings: (N, H, W, C) training embeddings
-            agbd: (N,) training AGBD values (already log-transformed)
-            fit_quantiles: If True, compute residual-based std for uncertainty
-        """
-        X = self._prepare_features(coords, embeddings)
-
-        # Fit main model (OLS)
-        self.model.fit(X, agbd)
-
-        # Compute residual-based uncertainty (MUCH faster than quantile regression)
-        if fit_quantiles:
-            # Get training predictions
-            train_pred = self.model.predict(X)
-
-            # Compute residual standard deviation
-            residuals = agbd - train_pred
-            self.residual_std = np.std(residuals)
-
-            # Store flag that we're using residual-based uncertainty
-            self._use_residual_std = True
-        else:
-            self.residual_std = None
-            self._use_residual_std = False
-
-    def predict(
-        self,
-        coords: np.ndarray,
-        embeddings: np.ndarray,
-        return_std: bool = True
-    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-        """
-        Predict AGBD values.
-
-        Args:
-            coords: (N, 2) query coordinates
-            embeddings: (N, H, W, C) query embeddings
-            return_std: If True, return std estimates (constant residual-based)
-
-        Returns:
-            predictions: (N,) predicted AGBD values
-            std: (N,) prediction std (constant across all predictions) if return_std=True, else None
-        """
-        X = self._prepare_features(coords, embeddings)
-        predictions = self.model.predict(X)
-
-        if return_std and self.residual_std is not None:
-            # Return constant std for all predictions (based on training residuals)
-            std = np.full_like(predictions, self.residual_std)
-            return predictions, std
-        else:
-            return predictions, None
-
-
 class IDWBaseline:
     """
     Inverse Distance Weighting (IDW) baseline.
@@ -606,7 +487,7 @@ class MLPBaseline:
         Args:
             hidden_dims: List of hidden layer dimensions
             dropout_rate: Dropout rate for MC Dropout
-            learning_rate: Learning rate for Adam optimizer
+            learning_rate: Learning rate for AdamW optimizer
             weight_decay: L2 regularization strength
             batch_size: Batch size for training
             n_epochs: Number of training epochs
@@ -703,7 +584,7 @@ class MLPBaseline:
         ).to(self.device)
 
         # Optimizer and loss
-        optimizer = optim.Adam(
+        optimizer = optim.AdamW(
             self.model.parameters(),
             lr=self.learning_rate,
             weight_decay=self.weight_decay
@@ -804,7 +685,7 @@ class EnsembleMLPBaseline:
         Args:
             n_models: Number of models in ensemble
             hidden_dims: List of hidden layer dimensions
-            learning_rate: Learning rate for Adam optimizer
+            learning_rate: Learning rate for AdamW optimizer
             weight_decay: L2 regularization strength (higher than MC Dropout since no dropout)
             batch_size: Batch size for training
             n_epochs: Number of training epochs
@@ -921,7 +802,7 @@ class EnsembleMLPBaseline:
             ).to(self.device)
 
             # Optimizer and loss (with L2 regularization via weight_decay)
-            optimizer = optim.Adam(
+            optimizer = optim.AdamW(
                 model.parameters(),
                 lr=self.learning_rate,
                 weight_decay=self.weight_decay
