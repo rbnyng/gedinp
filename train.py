@@ -73,8 +73,8 @@ def parse_args():
                         help='Validation set ratio')
     parser.add_argument('--test_ratio', type=float, default=0.15,
                         help='Test set ratio')
-    parser.add_argument('--buffer_size', type=float, default=0.5,
-                        help='Buffer size in degrees for spatial CV (~55km at 0.5 deg)')
+    parser.add_argument('--buffer_size', type=float, default=0.1,
+                        help='Buffer size in degrees for spatial CV')
     parser.add_argument('--min_shots_per_tile', type=int, default=10,
                         help='Minimum GEDI shots per tile')
     parser.add_argument('--early_stopping_patience', type=int, default=15,
