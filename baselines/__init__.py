@@ -3,7 +3,6 @@
 from .models import (
     RandomForestBaseline,
     XGBoostBaseline,
-    LinearRegressionBaseline,
     IDWBaseline,
     MLPBaseline,
     EnsembleMLPBaseline
@@ -12,7 +11,6 @@ from .models import (
 __all__ = [
     'RandomForestBaseline',
     'XGBoostBaseline',
-    'LinearRegressionBaseline',
     'IDWBaseline',
     'MLPBaseline',
     'EnsembleMLPBaseline'

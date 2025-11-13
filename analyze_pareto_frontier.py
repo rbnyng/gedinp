@@ -7,16 +7,35 @@ This script performs a comprehensive hyperparameter sweep for baseline models
 - Uncertainty calibration (Z-score Std)
 - Computational cost (Training Time)
 
-The analysis generates Pareto frontier plots that visualize the performance
-envelope of each model class, helping to demonstrate that ANP occupies a
-superior region of the trade-off space.
+The analysis supports multi-seed sweeping for statistical robustness, allowing
+you to evaluate which hyperparameter configurations are consistently Pareto-optimal
+across different random seeds.
+
+The analysis generates results in JSON and CSV format with full statistics
+(mean, std, min, max, median) across seeds for all metrics.
 
 Usage:
+    # Single seed (default, backward compatible)
     python analyze_pareto_frontier.py \
         --baseline_dir ./outputs_baselines \
         --output_dir ./outputs_pareto \
         --models rf xgb \
         --resume
+
+    # Multi-seed sweep (recommended for robustness)
+    python analyze_pareto_frontier.py \
+        --baseline_dir ./outputs_baselines \
+        --output_dir ./outputs_pareto \
+        --models rf xgb \
+        --n_seeds 5 \
+        --quick
+
+    # Explicit seed list
+    python analyze_pareto_frontier.py \
+        --baseline_dir ./outputs_baselines \
+        --output_dir ./outputs_pareto \
+        --models rf xgb \
+        --seeds 42 43 44 45 46
 """
 
 import argparse
@@ -58,7 +77,11 @@ def parse_args():
     parser.add_argument('--quick', action='store_true',
                         help='Run quick sweep with fewer hyperparameter combinations')
     parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed')
+                        help='Base random seed (used when n_seeds > 1 or with --seeds)')
+    parser.add_argument('--n_seeds', type=int, default=1,
+                        help='Number of random seeds to sweep (generates seeds from base seed)')
+    parser.add_argument('--seeds', type=int, nargs='+', default=None,
+                        help='Explicit list of seeds to use (overrides --n_seeds if provided)')
 
     # Skip expensive evaluations
     parser.add_argument('--resume', action='store_true',
@@ -279,20 +302,33 @@ def load_existing_results(output_dir: Path) -> List[Dict]:
 def save_results(results: List[Dict], output_dir: Path):
     """
     Save results to JSON and CSV.
+    Handles both single-seed and multi-seed aggregated formats.
     """
-    # Save JSON
+    # Save JSON (with full detail including per-seed results)
     with open(output_dir / 'pareto_results.json', 'w') as f:
         json.dump(results, f, indent=2)
 
-    # Save CSV
+    # Save CSV (aggregated view for easier analysis)
     rows = []
     for result in results:
         row = {
             'model_type': result['model_type'],
-            'train_time': result['train_time'],
             **{f'config_{k}': v for k, v in result['config'].items()},
-            **result['test_metrics']
         }
+
+        # Check if this is aggregated (multi-seed) or single-seed result
+        if 'aggregated_metrics' in result:
+            # Multi-seed: use aggregated metrics
+            row['n_seeds'] = result['n_seeds']
+            row['train_time_mean'] = result['train_time_mean']
+            row['train_time_std'] = result['train_time_std']
+            row.update(result['aggregated_metrics'])
+        else:
+            # Single-seed: use test_metrics directly
+            row['n_seeds'] = 1
+            row['train_time'] = result['train_time']
+            row.update(result['test_metrics'])
+
         rows.append(row)
 
     df = pd.DataFrame(rows)
@@ -313,8 +349,64 @@ def config_already_computed(config: Dict, model_type: str, existing_results: Lis
     return False
 
 
+def aggregate_results_across_seeds(seed_results: List[Dict]) -> Dict:
+    """
+    Aggregate results from multiple seeds for the same configuration.
+
+    Args:
+        seed_results: List of result dicts from different seeds (same config)
+
+    Returns:
+        Dict with aggregated statistics (mean, std, min, max) for all metrics
+    """
+    if not seed_results:
+        return {}
+
+    # Use first result as template for structure
+    template = seed_results[0]
+
+    # Aggregate metrics
+    metric_keys = list(template['test_metrics'].keys())
+    aggregated_metrics = {}
+
+    for key in metric_keys:
+        values = [r['test_metrics'][key] for r in seed_results]
+        aggregated_metrics[f'{key}_mean'] = np.mean(values)
+        aggregated_metrics[f'{key}_std'] = np.std(values)
+        aggregated_metrics[f'{key}_min'] = np.min(values)
+        aggregated_metrics[f'{key}_max'] = np.max(values)
+        aggregated_metrics[f'{key}_median'] = np.median(values)
+
+    # Aggregate training time
+    train_times = [r['train_time'] for r in seed_results]
+
+    aggregated = {
+        'model_type': template['model_type'],
+        'config': template['config'],
+        'train_time_mean': np.mean(train_times),
+        'train_time_std': np.std(train_times),
+        'train_time_min': np.min(train_times),
+        'train_time_max': np.max(train_times),
+        'aggregated_metrics': aggregated_metrics,
+        'n_seeds': len(seed_results),
+        'seed_results': seed_results  # Keep individual seed results
+    }
+
+    return aggregated
+
+
 def main():
     args = parse_args()
+
+    # Generate seed list
+    if args.seeds is not None:
+        # Use explicitly provided seeds
+        seed_list = args.seeds
+    else:
+        # Generate n_seeds starting from base seed
+        seed_list = [args.seed + i for i in range(args.n_seeds)]
+
+    # Set numpy random seed for reproducibility
     np.random.seed(args.seed)
 
     # Create output directory
@@ -331,6 +423,7 @@ def main():
     print("=" * 80)
     print(f"Models to analyze: {', '.join(args.models)}")
     print(f"Sweep mode: {'QUICK' if args.quick else 'FULL'}")
+    print(f"Seeds to sweep: {seed_list} ({len(seed_list)} seed(s))")
     print(f"Output directory: {output_dir}")
     print()
 
@@ -401,28 +494,38 @@ def main():
         print(f"Total configurations: {len(grid)}")
         print()
 
-        # Train and evaluate each configuration
+        # Train and evaluate each configuration across multiple seeds
         for config in tqdm(grid, desc=f"Training {model_type.upper()}"):
             # Skip if already computed
             if args.resume and config_already_computed(config, model_type, existing_results):
                 continue
 
-            # Train and evaluate
-            result = train_and_evaluate_config(
-                model_type=model_type,
-                config=config,
-                train_coords=train_coords,
-                train_embeddings=train_embeddings,
-                train_agbd_norm=train_agbd_norm,
-                test_coords=test_coords,
-                test_embeddings=test_embeddings,
-                test_agbd=test_agbd,
-                agbd_scale=agbd_scale,
-                log_transform=log_transform,
-                seed=args.seed
-            )
+            # Train and evaluate across all seeds
+            seed_results = []
+            for seed in seed_list:
+                result = train_and_evaluate_config(
+                    model_type=model_type,
+                    config=config,
+                    train_coords=train_coords,
+                    train_embeddings=train_embeddings,
+                    train_agbd_norm=train_agbd_norm,
+                    test_coords=test_coords,
+                    test_embeddings=test_embeddings,
+                    test_agbd=test_agbd,
+                    agbd_scale=agbd_scale,
+                    log_transform=log_transform,
+                    seed=seed
+                )
+                seed_results.append(result)
 
-            all_results.append(result)
+            # Aggregate results across seeds
+            if len(seed_list) > 1:
+                aggregated_result = aggregate_results_across_seeds(seed_results)
+            else:
+                # Single seed: keep original format for backward compatibility
+                aggregated_result = seed_results[0]
+
+            all_results.append(aggregated_result)
 
             # Save intermediate results
             save_results(all_results, output_dir)
@@ -443,15 +546,33 @@ def main():
         if not model_results:
             continue
 
-        # Extract metrics
-        log_r2_values = [r['test_metrics']['log_r2'] for r in model_results]
-        cal_errors = [r['test_metrics']['calibration_error'] for r in model_results]
-        train_times = [r['train_time'] for r in model_results]
+        # Extract metrics (handle both single-seed and multi-seed formats)
+        if 'aggregated_metrics' in model_results[0]:
+            # Multi-seed: use mean values
+            log_r2_values = [r['aggregated_metrics']['log_r2_mean'] for r in model_results]
+            cal_errors = [r['aggregated_metrics']['calibration_error_mean'] for r in model_results]
+            train_times = [r['train_time_mean'] for r in model_results]
 
-        print(f"\n{model_type.upper()} ({len(model_results)} configs):")
-        print(f"  Log R² range: [{min(log_r2_values):.4f}, {max(log_r2_values):.4f}]")
-        print(f"  Calibration error range: [{min(cal_errors):.4f}, {max(cal_errors):.4f}]")
-        print(f"  Training time range: [{min(train_times):.2f}s, {max(train_times):.2f}s]")
+            # Also get std values for reporting
+            log_r2_stds = [r['aggregated_metrics']['log_r2_std'] for r in model_results]
+            cal_error_stds = [r['aggregated_metrics']['calibration_error_std'] for r in model_results]
+
+            print(f"\n{model_type.upper()} ({len(model_results)} configs × {len(seed_list)} seeds):")
+            print(f"  Log R² range (mean): [{min(log_r2_values):.4f}, {max(log_r2_values):.4f}]")
+            print(f"  Log R² std range: [{min(log_r2_stds):.4f}, {max(log_r2_stds):.4f}]")
+            print(f"  Calibration error range (mean): [{min(cal_errors):.4f}, {max(cal_errors):.4f}]")
+            print(f"  Calibration error std range: [{min(cal_error_stds):.4f}, {max(cal_error_stds):.4f}]")
+            print(f"  Training time range (mean): [{min(train_times):.2f}s, {max(train_times):.2f}s]")
+        else:
+            # Single-seed: use test_metrics directly
+            log_r2_values = [r['test_metrics']['log_r2'] for r in model_results]
+            cal_errors = [r['test_metrics']['calibration_error'] for r in model_results]
+            train_times = [r['train_time'] for r in model_results]
+
+            print(f"\n{model_type.upper()} ({len(model_results)} configs):")
+            print(f"  Log R² range: [{min(log_r2_values):.4f}, {max(log_r2_values):.4f}]")
+            print(f"  Calibration error range: [{min(cal_errors):.4f}, {max(cal_errors):.4f}]")
+            print(f"  Training time range: [{min(train_times):.2f}s, {max(train_times):.2f}s]")
 
     print()
     print("=" * 80)
