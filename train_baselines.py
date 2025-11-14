@@ -3,11 +3,9 @@ import json
 from pathlib import Path
 import pickle
 from time import time
-
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
@@ -15,8 +13,7 @@ from baselines import (
     RandomForestBaseline,
     XGBoostBaseline,
     IDWBaseline,
-    MLPBaseline,
-    EnsembleMLPBaseline
+    MLPBaseline
 )
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
 from utils.evaluation import compute_metrics
