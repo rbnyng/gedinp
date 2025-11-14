@@ -52,10 +52,8 @@ class GEDINeuralProcessDataset(Dataset):
                           If None, computed from data_df. Should be computed from training
                           data and shared across train/val/test for proper normalization.
         """
-        # Filter out shots without embeddings
         self.data_df = data_df[data_df['embedding_patch'].notna()].copy()
 
-        # Group by tiles
         self.tiles = []
         for tile_id, group in self.data_df.groupby('tile_id'):
             if len(group) >= min_shots_per_tile:
@@ -74,15 +72,12 @@ class GEDINeuralProcessDataset(Dataset):
         self.augment_coords = augment_coords
         self.coord_noise_std = coord_noise_std
 
-        # Store global bounds for normalization
         if global_bounds is None:
-            # Compute from data_df
             self.lon_min = self.data_df['longitude'].min()
             self.lon_max = self.data_df['longitude'].max()
             self.lat_min = self.data_df['latitude'].min()
             self.lat_max = self.data_df['latitude'].max()
         else:
-            # Use provided global bounds
             self.lon_min, self.lat_min, self.lon_max, self.lat_max = global_bounds
 
         print(f"Dataset initialized with {len(self.tiles)} tiles")
@@ -126,40 +121,30 @@ class GEDINeuralProcessDataset(Dataset):
         tile_data = self.tiles[idx].copy()
         n_shots = len(tile_data)
 
-        # Random context/target split
         context_ratio = random.uniform(*self.context_ratio_range)
         n_context = max(1, int(n_shots * context_ratio))
 
-        # Randomly select context shots
         context_indices = random.sample(range(n_shots), n_context)
         target_indices = [i for i in range(n_shots) if i not in context_indices]
 
-        # Extract data
         tile_array = tile_data.to_numpy()
         coords = tile_data[['longitude', 'latitude']].values
-        embeddings = np.stack(tile_data['embedding_patch'].values)  # (N, H, W, C)
-        agbd = tile_data['agbd'].values[:, None]  # (N, 1)
+        embeddings = np.stack(tile_data['embedding_patch'].values)
+        agbd = tile_data['agbd'].values[:, None]
 
-        # Normalize coordinates
         if self.normalize_coords:
             coords = self._normalize_coordinates(coords)
 
-        # Apply coordinate augmentation (small random noise)
         if self.augment_coords:
             coords = coords + np.random.normal(0, self.coord_noise_std, coords.shape)
-            # Clip to stay in valid range
             coords = np.clip(coords, 0, 1)
 
-        # Normalize AGBD
         if self.normalize_agbd:
             if self.log_transform_agbd:
-                # Log transform then normalize
                 agbd = np.log1p(agbd) / np.log1p(self.agbd_scale)
             else:
-                # Direct normalization
                 agbd = agbd / self.agbd_scale
 
-        # Split context/target
         context_coords = coords[context_indices]
         context_embeddings = embeddings[context_indices]
         context_agbd = agbd[context_indices]

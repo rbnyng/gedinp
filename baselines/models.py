@@ -74,11 +74,9 @@ class RandomForestBaseline:
         Returns:
             (N, 2 + H*W*C) flattened feature array
         """
-        # Flatten embeddings
         n_samples = embeddings.shape[0]
         embeddings_flat = embeddings.reshape(n_samples, -1)
 
-        # Concatenate coords + embeddings
         features = np.concatenate([coords, embeddings_flat], axis=1)
         return features
 
@@ -121,12 +119,10 @@ class RandomForestBaseline:
         predictions = self.model.predict(X)
 
         if return_std:
-            # Get predictions from all trees
             tree_predictions = np.array([
                 tree.predict(X) for tree in self.model.estimators_
-            ])  # (n_trees, N)
+            ])
 
-            # Standard deviation across trees
             std = np.std(tree_predictions, axis=0)
             return predictions, std
         else:
@@ -207,11 +203,9 @@ class XGBoostBaseline:
         Returns:
             (N, 2 + H*W*C) flattened feature array
         """
-        # Flatten embeddings
         n_samples = embeddings.shape[0]
         embeddings_flat = embeddings.reshape(n_samples, -1)
 
-        # Concatenate coords + embeddings
         features = np.concatenate([coords, embeddings_flat], axis=1)
         return features
 
@@ -287,11 +281,9 @@ class XGBoostBaseline:
         predictions = self.model.predict(X)
 
         if return_std and self.model_upper is not None and self.model_lower is not None:
-            # Predict upper and lower quantiles
             upper = self.model_upper.predict(X)
             lower = self.model_lower.predict(X)
 
-            # Approximate std from quantile range
             # For 95% interval, std ≈ (upper - lower) / (2 * 1.96)
             std = (upper - lower) / (2 * 1.96)
             return predictions, std
@@ -371,25 +363,20 @@ class IDWBaseline:
         for i in range(n_query):
             query_coord = coords[i:i+1]
 
-            # Compute distances to all training points
             distances = np.sqrt(
                 np.sum((self.train_coords - query_coord) ** 2, axis=1)
             )
 
-            # Get k nearest neighbors
             nearest_indices = np.argsort(distances)[:self.n_neighbors]
             nearest_distances = distances[nearest_indices]
             nearest_agbd = self.train_agbd[nearest_indices]
 
-            # Compute inverse distance weights
             # Add epsilon to avoid division by zero
             weights = 1.0 / (nearest_distances ** self.power + self.epsilon)
-            weights = weights / weights.sum()  # Normalize
+            weights = weights / weights.sum()
 
-            # Weighted prediction
             predictions[i] = np.sum(weights * nearest_agbd)
 
-            # Weighted standard deviation
             if return_std:
                 weighted_mean = predictions[i]
                 weighted_var = np.sum(weights * (nearest_agbd - weighted_mean) ** 2)
@@ -431,7 +418,6 @@ class MLPNet(nn.Module):
                 layers.append(nn.Dropout(dropout_rate))
             prev_dim = hidden_dim
 
-        # Output layer (predict mean)
         layers.append(nn.Linear(prev_dim, 1))
 
         self.network = nn.Sequential(*layers)
@@ -518,11 +504,9 @@ class MLPBaseline:
         Returns:
             (N, 2 + H*W*C) flattened feature array
         """
-        # Flatten embeddings
         n_samples = embeddings.shape[0]
         embeddings_flat = embeddings.reshape(n_samples, -1)
 
-        # Concatenate coords + embeddings
         features = np.concatenate([coords, embeddings_flat], axis=1)
         return features
 
@@ -622,8 +606,7 @@ class MLPBaseline:
         X_tensor = torch.FloatTensor(X).to(self.device)
 
         if return_std:
-            # MC Dropout: multiple forward passes with dropout enabled
-            self.model.train()  # Keep dropout active
+            self.model.train()
             mc_predictions = []
 
             with torch.no_grad():
@@ -631,16 +614,14 @@ class MLPBaseline:
                     pred = self.model(X_tensor)
                     mc_predictions.append(pred.cpu().numpy())
 
-            mc_predictions = np.array(mc_predictions)  # (mc_samples, N, 1)
-            mc_predictions = mc_predictions.squeeze(-1)  # (mc_samples, N)
+            mc_predictions = np.array(mc_predictions)
+            mc_predictions = mc_predictions.squeeze(-1)
 
-            # Mean and std across MC samples
             predictions = np.mean(mc_predictions, axis=0)
             stds = np.std(mc_predictions, axis=0)
 
             return predictions, stds
         else:
-            # Single forward pass
             self.model.eval()
             with torch.no_grad():
                 predictions = self.model(X_tensor).cpu().numpy().squeeze(-1)
