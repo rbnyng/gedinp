@@ -13,7 +13,8 @@ Usage:
         --baseline_dir ./outputs_baselines \
         --output_dir ./outputs_pareto \
         --models rf xgb \
-        --seeds 42 43 44 45 46
+        --seeds 42 43 44 45 46 \
+        --resume
 """
 
 import argparse
