@@ -7,9 +7,10 @@ This script performs a comprehensive hyperparameter sweep for baseline models
 - Uncertainty calibration (Z-score Std)
 - Computational cost (Training Time)
 
-The analysis supports multi-seed sweeping for statistical robustness, allowing
-you to evaluate which hyperparameter configurations are consistently Pareto-optimal
-across different random seeds.
+The analysis supports multi-seed sweeping for statistical robustness. Each seed
+controls the DATA SPLIT (train/test spatial partitioning), not just the model's
+internal randomness. This allows you to evaluate which hyperparameter configurations
+are consistently Pareto-optimal across different spatial data splits.
 
 The analysis generates results in JSON and CSV format with full statistics
 (mean, std, min, max, median) across seeds for all metrics.
@@ -51,6 +52,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from baselines import RandomForestBaseline, XGBoostBaseline
+from data.spatial_cv import BufferedSpatialSplitter
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
 from utils.evaluation import compute_metrics
 
@@ -435,50 +437,30 @@ def main():
             print(f"Resuming from {len(existing_results)} existing results")
             print()
 
-    # Load data splits from baseline training
+    # Load processed data from baseline training
     baseline_dir = Path(args.baseline_dir)
 
-    print("Step 1: Loading data splits from Parquet files...")
-    # Load Parquet files which include embedding vectors
-    train_df = pd.read_parquet(baseline_dir / 'train_split.parquet')
-    test_df = pd.read_parquet(baseline_dir / 'test_split.parquet')
+    print("Step 1: Loading processed data...")
+    # Load the full processed dataset (before splitting)
+    with open(baseline_dir / 'processed_data.pkl', 'rb') as f:
+        gedi_df = pickle.load(f)
 
-    # Convert embedding lists back to numpy arrays
-    train_df['embedding_patch'] = train_df['embedding_patch'].apply(lambda x: np.array(x) if isinstance(x, list) else x)
-    test_df['embedding_patch'] = test_df['embedding_patch'].apply(lambda x: np.array(x) if isinstance(x, list) else x)
+    print(f"Loaded {len(gedi_df)} samples with embeddings")
 
-    print(f"Loaded {len(train_df)} training samples, {len(test_df)} test samples with embeddings")
-
-    # Load config for normalization parameters
+    # Load config for normalization and split parameters
     with open(baseline_dir / 'config.json', 'r') as f:
         baseline_config = json.load(f)
 
     agbd_scale = baseline_config['agbd_scale']
     log_transform = baseline_config['log_transform_agbd']
     global_bounds = baseline_config['global_bounds']
-    buffer_size = baseline_config.get('buffer_size', 'unknown')
+    buffer_size = baseline_config.get('buffer_size', 0.5)
+    val_ratio = baseline_config.get('val_ratio', 0.15)
+    test_ratio = baseline_config.get('test_ratio', 0.15)
 
     print(f"AGBD normalization: scale={agbd_scale}, log_transform={log_transform}")
-    print(f"Spatial split buffer: {buffer_size}° (~{float(buffer_size)*111:.0f}km)" if buffer_size != 'unknown' else "Spatial split buffer: unknown")
-    print()
-
-    # Prepare data
-    print("Step 2: Preparing features...")
-
-    train_coords = train_df[['longitude', 'latitude']].values
-    # Embeddings are already converted to numpy arrays above
-    train_embeddings = np.stack(train_df['embedding_patch'].values)
-    train_agbd = train_df['agbd'].values
-    train_agbd_norm = normalize_agbd(train_agbd, agbd_scale=agbd_scale, log_transform=log_transform)
-    train_coords = normalize_coords(train_coords, global_bounds)
-
-    test_coords = test_df[['longitude', 'latitude']].values
-    test_embeddings = np.stack(test_df['embedding_patch'].values)
-    test_agbd = test_df['agbd'].values
-    test_coords = normalize_coords(test_coords, global_bounds)
-
-    print(f"Train: {len(train_coords)} samples")
-    print(f"Test: {len(test_coords)} samples")
+    print(f"Spatial split buffer: {buffer_size}° (~{buffer_size*111:.0f}km)")
+    print(f"Split ratios: val={val_ratio}, test={test_ratio}")
     print()
 
     # Run hyperparameter sweep
@@ -503,13 +485,37 @@ def main():
             # Train and evaluate across all seeds
             seed_results = []
             for seed in seed_list:
+                # Create new data split for this seed
+                print(f"\nCreating data split with seed={seed}...")
+                splitter = BufferedSpatialSplitter(
+                    gedi_df,
+                    buffer_size=buffer_size,
+                    val_ratio=val_ratio,
+                    test_ratio=test_ratio,
+                    random_state=seed
+                )
+                train_df, val_df, test_df = splitter.split()
+
+                # Prepare features for this split
+                train_coords = train_df[['longitude', 'latitude']].values
+                train_embeddings = np.stack(train_df['embedding_patch'].values)
+                train_agbd = train_df['agbd'].values
+                train_agbd_norm = normalize_agbd(train_agbd, agbd_scale=agbd_scale, log_transform=log_transform)
+                train_coords_norm = normalize_coords(train_coords, global_bounds)
+
+                test_coords = test_df[['longitude', 'latitude']].values
+                test_embeddings = np.stack(test_df['embedding_patch'].values)
+                test_agbd = test_df['agbd'].values
+                test_coords_norm = normalize_coords(test_coords, global_bounds)
+
+                # Train and evaluate
                 result = train_and_evaluate_config(
                     model_type=model_type,
                     config=config,
-                    train_coords=train_coords,
+                    train_coords=train_coords_norm,
                     train_embeddings=train_embeddings,
                     train_agbd_norm=train_agbd_norm,
-                    test_coords=test_coords,
+                    test_coords=test_coords_norm,
                     test_embeddings=test_embeddings,
                     test_agbd=test_agbd,
                     agbd_scale=agbd_scale,
