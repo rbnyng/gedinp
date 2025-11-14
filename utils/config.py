@@ -41,10 +41,8 @@ def save_config(config: Dict[str, Any], config_path: Path) -> None:
         config: Dictionary containing configuration parameters
         config_path: Path where config.json should be saved
     """
-    # Create parent directory if it doesn't exist
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Convert any non-serializable types to serializable ones
     serializable_config = _make_serializable(config)
 
     with open(config_path, 'w') as f:

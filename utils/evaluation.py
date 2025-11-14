@@ -15,13 +15,11 @@ from tqdm import tqdm
 from pathlib import Path
 from typing import Tuple, Dict, Optional, Union
 
-# Import for loss computation
 try:
     from models.neural_process import neural_process_loss
 except ImportError:
     neural_process_loss = None
 
-# Import denormalization utilities
 from utils.normalization import denormalize_agbd, denormalize_std
 
 
@@ -41,7 +39,6 @@ def compute_metrics(
     Returns:
         Dictionary with metrics: rmse, mae, r2, and optionally mean_uncertainty
     """
-    # Convert to numpy if torch tensors
     if isinstance(pred, torch.Tensor):
         pred = pred.detach().cpu().numpy().flatten()
     if isinstance(true, torch.Tensor):
@@ -49,17 +46,12 @@ def compute_metrics(
     if pred_std is not None and isinstance(pred_std, torch.Tensor):
         pred_std = pred_std.detach().cpu().numpy().flatten()
 
-    # Flatten arrays
     pred = pred.flatten()
     true = true.flatten()
 
-    # RMSE
     rmse = np.sqrt(np.mean((pred - true) ** 2))
-
-    # MAE
     mae = np.mean(np.abs(pred - true))
 
-    # R²
     ss_res = np.sum((true - pred) ** 2)
     ss_tot = np.sum((true - np.mean(true)) ** 2)
     r2 = 1 - (ss_res / (ss_tot + 1e-8))
@@ -70,7 +62,6 @@ def compute_metrics(
         'r2': r2,
     }
 
-    # Add uncertainty metric if available
     if pred_std is not None:
         if not isinstance(pred_std, np.ndarray):
             pred_std = np.array(pred_std)
@@ -101,7 +92,6 @@ def compute_calibration_metrics(
             - coverage_2sigma: empirical coverage at 2σ (ideal: 95.4%)
             - coverage_3sigma: empirical coverage at 3σ (ideal: 99.7%)
     """
-    # Convert to numpy if torch tensors
     if isinstance(predictions, torch.Tensor):
         predictions = predictions.detach().cpu().numpy().flatten()
     if isinstance(targets, torch.Tensor):
@@ -109,19 +99,15 @@ def compute_calibration_metrics(
     if isinstance(stds, torch.Tensor):
         stds = stds.detach().cpu().numpy().flatten()
 
-    # Flatten arrays
     predictions = predictions.flatten()
     targets = targets.flatten()
     stds = stds.flatten()
 
-    # Compute z-scores (standardized residuals)
     z_scores = (targets - predictions) / (stds + 1e-8)
 
-    # Z-score statistics
     z_mean = float(np.mean(z_scores))
     z_std = float(np.std(z_scores))
 
-    # Compute empirical coverage at key confidence levels
     abs_z = np.abs(z_scores)
     coverage_1sigma = float(np.sum(abs_z <= 1.0) / len(z_scores) * 100)
     coverage_2sigma = float(np.sum(abs_z <= 2.0) / len(z_scores) * 100)

@@ -143,7 +143,6 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
         batch_kl = 0
         n_tiles_in_batch = 0
 
-        # Process each tile in the batch
         for i in range(len(batch['context_coords'])):
             context_coords = batch['context_coords'][i].to(device)
             context_embeddings = batch['context_embeddings'][i].to(device)
@@ -155,7 +154,6 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
             if len(target_coords) == 0:
                 continue
 
-            # Forward pass
             pred_mean, pred_log_var, z_mu, z_log_sigma = model(
                 context_coords,
                 context_embeddings,
@@ -302,7 +300,6 @@ def main():
     gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
     print()
 
-    # Filter out shots without embeddings
     gedi_df = gedi_df[gedi_df['embedding_patch'].notna()]
     print(f"Retained {len(gedi_df)} shots with valid embeddings")
     print()
@@ -444,7 +441,6 @@ def main():
     train_losses = []
     val_losses = []
 
-    # Start training timer
     training_start_time = time()
 
     for epoch in range(1, args.epochs + 1):
@@ -457,7 +453,6 @@ def main():
         else:
             kl_weight = args.kl_weight_max
 
-        # Train
         train_metrics = train_epoch(model, train_loader, optimizer, args.device, kl_weight)
         train_losses.append(train_metrics['loss'])
 

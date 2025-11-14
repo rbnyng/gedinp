@@ -18,7 +18,6 @@ import hashlib
 import json
 from pathlib import Path
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
 

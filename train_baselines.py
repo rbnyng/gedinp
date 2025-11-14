@@ -423,7 +423,6 @@ def main():
     with open(output_dir / 'processed_data.pkl', 'wb') as f:
         pickle.dump(gedi_df, f)
 
-    # Step 3: Spatial split
     print("Step 3: Creating spatial train/val/test split...")
     print(f"Using BufferedSpatialSplitter with buffer_size={args.buffer_size}° (~{args.buffer_size*111:.0f}km)")
     splitter = BufferedSpatialSplitter(
