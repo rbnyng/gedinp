@@ -1,29 +1,6 @@
 """
-Pareto Frontier Analysis for GEDI Baseline Models
-
-This script performs a comprehensive hyperparameter sweep for baseline models
-(XGBoost and Random Forest) to explore the trade-off between:
-- Model accuracy (Test Log R²)
-- Uncertainty calibration (Z-score Std)
-- Computational cost (Training Time)
-
-The analysis supports multi-seed sweeping for statistical robustness. Each seed
-controls the DATA SPLIT (train/test spatial partitioning), not just the model's
-internal randomness. This allows you to evaluate which hyperparameter configurations
-are consistently Pareto-optimal across different spatial data splits.
-
-The analysis generates results in JSON and CSV format with full statistics
-(mean, std, min, max, median) across seeds for all metrics.
-
 Usage:
-    # Single seed (default, backward compatible)
-    python analyze_pareto_frontier.py \
-        --baseline_dir ./outputs_baselines \
-        --output_dir ./outputs_pareto \
-        --models rf xgb \
-        --resume
-
-    # Multi-seed sweep (recommended for robustness)
+    # Multi-seed sweep
     python analyze_pareto_frontier.py \
         --baseline_dir ./outputs_baselines \
         --output_dir ./outputs_pareto \
