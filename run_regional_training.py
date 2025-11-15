@@ -66,6 +66,24 @@ REGIONS = {
         'bbox': [-75, 3, -74, 4],
         'batch_size': 16,
         'description': 'Tropical montane forest, Andean region'
+    },
+    'massif_central': {
+        'name': 'Massif Central, France',
+        'bbox': [4.3, 46.1, 5.3, 46.9],
+        'batch_size': 16,
+        'description': 'Temperate mountain forest, central France'
+    },
+    'el_sira': {
+        'name': 'El Sira, Peru',
+        'bbox': [-74.6, -10.4, -74.3, -8.6],
+        'batch_size': 16,
+        'description': 'Tropical montane forest, Peruvian Amazon'
+    },
+    'guainia': {
+        'name': 'Guainia, Colombia',
+        'bbox': [-69, 3, -68, 4],
+        'batch_size': 16,
+        'description': 'Tropical rainforest, Colombian Amazon'
     }
 }
 
