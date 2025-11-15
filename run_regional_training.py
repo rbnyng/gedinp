@@ -291,6 +291,80 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
         print(f"Saved ANP comparison to: {output_dir / 'anp_regional_comparison.png'}")
         plt.close()
 
+        # Plot calibration metrics if available
+        calib_cols = [col for col in anp_df.columns if any(x in col for x in ['z_mean', 'z_std', 'coverage'])]
+        if calib_cols:
+            calib_metrics = []
+            for col in calib_cols:
+                if 'test' in col and '_mean' in col:
+                    base_metric = col.replace('_mean', '')
+                    std_col = f"{base_metric}_std"
+                    if std_col in anp_df.columns:
+                        label = base_metric.replace('test_', '').replace('_', ' ').title()
+                        calib_metrics.append((base_metric, label))
+
+            if calib_metrics:
+                n_metrics = len(calib_metrics)
+                fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+                fig.suptitle('Neural Process (ANP) Uncertainty & Calibration Metrics Across Regions',
+                             fontsize=16, fontweight='bold')
+
+                for idx, (metric, label) in enumerate(calib_metrics[:6]):  # Max 6 plots
+                    ax = axes.flat[idx]
+
+                    mean_col = f'{metric}_mean'
+                    std_col = f'{metric}_std'
+
+                    if mean_col in anp_df.columns and std_col in anp_df.columns:
+                        regions = anp_df['region']
+                        means = anp_df[mean_col]
+                        stds = anp_df[std_col]
+
+                        x = range(len(regions))
+                        colors = sns.color_palette("husl", len(regions))
+
+                        ax.bar(x, means, yerr=stds, capsize=5, color=colors, alpha=0.7,
+                              error_kw={'linewidth': 2})
+
+                        # Add value labels
+                        for i, (mean, std, region) in enumerate(zip(means, stds, regions)):
+                            ax.text(i, mean + std + 0.02 * abs(mean) if mean >= 0 else mean - std - 0.02 * abs(mean),
+                                   f'{mean:.2f}±{std:.2f}',
+                                   ha='center', va='bottom' if mean >= 0 else 'top',
+                                   fontsize=8, rotation=45)
+
+                        ax.set_xticks(x)
+                        ax.set_xticklabels(regions, rotation=45, ha='right')
+                        ax.set_ylabel(label, fontweight='bold')
+                        ax.set_title(f'{label}')
+                        ax.grid(True, alpha=0.3, axis='y')
+
+                        # Add reference lines for calibration metrics
+                        if 'z_mean' in metric:
+                            ax.axhline(y=0, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='Ideal: 0')
+                            ax.legend()
+                        elif 'z_std' in metric:
+                            ax.axhline(y=1, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='Ideal: 1')
+                            ax.legend()
+                        elif 'coverage_1sigma' in metric:
+                            ax.axhline(y=68.3, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='Ideal: 68.3%')
+                            ax.legend()
+                        elif 'coverage_2sigma' in metric:
+                            ax.axhline(y=95.4, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='Ideal: 95.4%')
+                            ax.legend()
+                        elif 'coverage_3sigma' in metric:
+                            ax.axhline(y=99.7, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='Ideal: 99.7%')
+                            ax.legend()
+
+                # Hide unused subplots
+                for idx in range(len(calib_metrics), 6):
+                    axes.flat[idx].axis('off')
+
+                plt.tight_layout()
+                plt.savefig(output_dir / 'anp_calibration_comparison.png', dpi=300, bbox_inches='tight')
+                print(f"Saved ANP calibration comparison to: {output_dir / 'anp_calibration_comparison.png'}")
+                plt.close()
+
     # Plot 2: Baseline comparison across regions
     if has_baselines:
         # Create a plot for each region comparing models
@@ -426,6 +500,16 @@ def write_regional_summary(anp_df, baseline_df, output_dir, args, total_duration
                           'test_linear_mae_mean', 'test_linear_mae_std']
             f.write(anp_df[display_cols].to_string(index=False) + "\n\n")
 
+            # Add calibration metrics if available
+            calib_cols = [col for col in anp_df.columns if any(x in col for x in ['z_mean', 'z_std', 'coverage'])]
+            if calib_cols:
+                f.write("-" * 80 + "\n")
+                f.write("UNCERTAINTY QUANTIFICATION & CALIBRATION METRICS\n")
+                f.write("-" * 80 + "\n\n")
+                display_calib_cols = ['region'] + [col for col in calib_cols if 'test' in col]
+                if len(display_calib_cols) > 1:  # More than just 'region'
+                    f.write(anp_df[display_calib_cols].to_string(index=False) + "\n\n")
+
             best_region = anp_df.loc[anp_df['test_log_r2_mean'].idxmax()]
             f.write(f"Best Region: {best_region['region']}\n")
             f.write(f"  Test Log R²: {best_region['test_log_r2_mean']:.4f} ± "
@@ -445,6 +529,14 @@ def write_regional_summary(anp_df, baseline_df, output_dir, args, total_duration
                 display_cols = ['model', 'test_log_r2_mean', 'test_log_r2_std',
                               'test_linear_rmse_mean', 'test_linear_rmse_std']
                 f.write(region_df[display_cols].to_string(index=False) + "\n")
+
+                # Add calibration metrics if available
+                calib_cols = [col for col in baseline_df.columns if any(x in col for x in ['z_mean', 'z_std', 'coverage'])]
+                if calib_cols:
+                    display_calib_cols = ['model'] + [col for col in calib_cols if 'test' in col]
+                    if len(display_calib_cols) > 1 and all(col in region_df.columns for col in display_calib_cols):
+                        f.write("\nCalibration metrics:\n")
+                        f.write(region_df[display_calib_cols].to_string(index=False) + "\n")
 
                 best_model = region_df.loc[region_df['test_log_r2_mean'].idxmax()]
                 f.write(f"\nBest Model: {best_model['model'].upper()}\n")
@@ -594,6 +686,9 @@ def main():
     if not anp_df.empty:
         print("  - anp_regional_results.csv          # ANP results across regions")
         print("  - anp_regional_comparison.png       # ANP performance visualization")
+        calib_cols = [col for col in anp_df.columns if any(x in col for x in ['z_mean', 'z_std', 'coverage'])]
+        if calib_cols:
+            print("  - anp_calibration_comparison.png    # ANP calibration & uncertainty metrics")
     if not baseline_df.empty:
         print("  - baseline_regional_results.csv     # Baseline results across regions")
         print("  - baselines_regional_comparison.png # Baseline performance visualization")
@@ -618,6 +713,14 @@ def main():
             print("\nANP Performance by Region:")
             print(anp_df[['region', 'test_log_r2_mean', 'test_log_r2_std',
                           'test_linear_rmse_mean', 'test_linear_rmse_std']].to_string(index=False))
+
+            # Print calibration metrics if available
+            calib_cols = [col for col in anp_df.columns if any(x in col for x in ['z_mean', 'z_std', 'coverage_1sigma'])]
+            if calib_cols:
+                display_calib_cols = ['region'] + [col for col in calib_cols if 'test' in col]
+                if len(display_calib_cols) > 1:
+                    print("\nCalibration & Uncertainty Metrics:")
+                    print(anp_df[display_calib_cols].to_string(index=False))
 
         if not baseline_df.empty:
             print("\nBest Baseline by Region:")
