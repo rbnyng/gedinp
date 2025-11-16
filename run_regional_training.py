@@ -1,26 +1,11 @@
 #!/usr/bin/env python3
 """
-Regional Training Script - Train models across multiple geographic regions
-
-This script runs multi-seed training experiments across different geographic regions,
-comparing Neural Process (ANP) performance with baseline models (XGBoost, Random Forest,
-IDW, MLP) in diverse forest ecosystems.
-
 Usage:
-    # Run with default settings (5 seeds, ANP + all baselines)
-    python run_regional_training.py --n_seeds 5 --cache_dir ./cache --output_dir ./regional_results
-
     # Run only specific regions
     python run_regional_training.py --n_seeds 3 --regions maine hokkaido --cache_dir ./cache
-
-    # Run only ANP (skip baselines)
-    python run_regional_training.py --n_seeds 5 --skip_baselines --cache_dir ./cache
-
-    # Run only baselines (skip ANP)
-    python run_regional_training.py --n_seeds 5 --skip_anp --cache_dir ./cache
-
+    
     # Use specific seeds
-    python run_regional_training.py --seeds 42 43 44 --cache_dir ./cache
+    python run_regional_training.py --seeds 42 69 9000 1618 54088 777 1314 3 67 80085 --cache_dir ./cache
 """
 
 import argparse
@@ -35,7 +20,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import defaultdict
 
-# Region definitions with their specific parameters
 REGIONS = {
     'maine': {
         'name': 'Maine, USA',
@@ -66,24 +50,6 @@ REGIONS = {
         'bbox': [-75, 3, -74, 4],
         'batch_size': 16,
         'description': 'Tropical montane forest, Andean region'
-    },
-    'massif_central': {
-        'name': 'Massif Central, France',
-        'bbox': [4.3, 46.1, 5.3, 46.9],
-        'batch_size': 16,
-        'description': 'Temperate mountain forest, central France'
-    },
-    'el_sira': {
-        'name': 'El Sira, Peru',
-        'bbox': [-74.6, -10.4, -74.3, -8.6],
-        'batch_size': 16,
-        'description': 'Tropical montane forest, Peruvian Amazon'
-    },
-    'guainia': {
-        'name': 'Guainia, Colombia',
-        'bbox': [-69, 3, -68, 4],
-        'batch_size': 16,
-        'description': 'Tropical rainforest, Colombian Amazon'
     }
 }
 
