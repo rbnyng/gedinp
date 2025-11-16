@@ -10,7 +10,8 @@ import rasterio
 from rasterio.transform import from_bounds
 from rasterio.crs import CRS
 from scipy.spatial import cKDTree
-from typing import Optional
+from typing import Optional, Tuple, Union
+import pickle
 from data.gedi import GEDIQuerier
 from data.embeddings import EmbeddingExtractor
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd, denormalize_std
@@ -53,25 +54,101 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_model_and_config(checkpoint_dir: Path, device: str):
-    print("Loading model configuration...")
+def detect_model_type(checkpoint_dir: Path) -> str:
+    """
+    Detect whether the checkpoint is a Neural Process or baseline model.
+
+    Returns:
+        'neural_process', 'xgboost', 'random_forest', 'mlp', or 'idw'
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+
+    # Check for baseline model pickle files
+    if (checkpoint_dir / 'xgboost.pkl').exists():
+        return 'xgboost'
+    elif (checkpoint_dir / 'random_forest.pkl').exists():
+        return 'random_forest'
+    elif (checkpoint_dir / 'mlp_dropout.pkl').exists():
+        return 'mlp'
+    elif (checkpoint_dir / 'idw.pkl').exists():
+        return 'idw'
+    # Check for Neural Process checkpoint files
+    elif (checkpoint_dir / 'best_r2_model.pt').exists() or (checkpoint_dir / 'best_model.pt').exists():
+        return 'neural_process'
+    else:
+        raise ValueError(
+            f"Could not detect model type in {checkpoint_dir}. "
+            f"Expected either .pt files (Neural Process) or .pkl files (baselines)"
+        )
+
+
+def load_baseline_model(checkpoint_dir: Path, model_type: str) -> Tuple[object, dict]:
+    """
+    Load a baseline model from pickle file.
+
+    Args:
+        checkpoint_dir: Directory containing the model pickle file
+        model_type: Type of baseline model ('xgboost', 'random_forest', 'mlp', 'idw')
+
+    Returns:
+        Tuple of (model, config)
+    """
+    print(f"Loading {model_type.upper()} baseline model...")
     config = load_config(checkpoint_dir / 'config.json')
 
-    print(f"Architecture mode: {config.get('architecture_mode', 'deterministic')}")
+    # Map model type to pickle filename
+    model_files = {
+        'xgboost': 'xgboost.pkl',
+        'random_forest': 'random_forest.pkl',
+        'mlp': 'mlp_dropout.pkl',
+        'idw': 'idw.pkl'
+    }
 
-    # Initialize and load model using utility function
-    print("Initializing model...")
-    model, checkpoint, checkpoint_path = load_model_from_checkpoint(
-        checkpoint_dir, device
-    )
+    model_path = checkpoint_dir / model_files[model_type]
 
-    print(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}")
-    if 'val_metrics' in checkpoint:
-        print("Validation metrics:")
-        for k, v in checkpoint['val_metrics'].items():
-            print(f"  {k}: {v:.4f}")
+    with open(model_path, 'rb') as f:
+        model = pickle.load(f)
+
+    print(f"Loaded {model_type} model from: {model_path}")
 
     return model, config
+
+
+def load_model_and_config(checkpoint_dir: Path, device: str):
+    """
+    Load model and config, automatically detecting model type.
+
+    Returns:
+        Tuple of (model, config, model_type)
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+    model_type = detect_model_type(checkpoint_dir)
+
+    print(f"Detected model type: {model_type}")
+
+    if model_type == 'neural_process':
+        print("Loading model configuration...")
+        config = load_config(checkpoint_dir / 'config.json')
+
+        print(f"Architecture mode: {config.get('architecture_mode', 'deterministic')}")
+
+        # Initialize and load model using utility function
+        print("Initializing model...")
+        model, checkpoint, checkpoint_path = load_model_from_checkpoint(
+            checkpoint_dir, device
+        )
+
+        print(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}")
+        if 'val_metrics' in checkpoint:
+            print("Validation metrics:")
+            for k, v in checkpoint['val_metrics'].items():
+                print(f"  {k}: {v:.4f}")
+
+        return model, config, model_type
+    else:
+        # Load baseline model
+        model, config = load_baseline_model(checkpoint_dir, model_type)
+        return model, config, model_type
 
 
 def query_context_gedi(
@@ -186,7 +263,7 @@ def extract_embeddings(
     return result_df
 
 
-def run_inference(
+def run_inference_neural_process(
     model: torch.nn.Module,
     context_df: pd.DataFrame,
     query_df: pd.DataFrame,
@@ -194,7 +271,8 @@ def run_inference(
     batch_size: int,
     device: str
 ) -> tuple:
-    print(f"\nRunning inference on {len(query_df)} query points...")
+    """Run inference with Neural Process model (requires context)."""
+    print(f"\nRunning Neural Process inference on {len(query_df)} query points...")
     print(f"Using {len(context_df)} context shots")
     print(f"Batch size: {batch_size}")
     print(f"Device: {device}")
@@ -247,6 +325,57 @@ def run_inference(
 
     predictions = denormalize_agbd(predictions_norm)
     uncertainties = denormalize_std(uncertainties_norm, predictions_norm, simple_transform=False)
+
+    print(f"\nPrediction statistics:")
+    print(f"  Mean AGB: {predictions.mean():.2f} Mg/ha")
+    print(f"  Std AGB: {predictions.std():.2f} Mg/ha")
+    print(f"  Range: [{predictions.min():.2f}, {predictions.max():.2f}] Mg/ha")
+    print(f"  Mean uncertainty: {uncertainties.mean():.2f} Mg/ha")
+
+    return predictions, uncertainties
+
+
+def run_inference_baseline(
+    model: object,
+    query_df: pd.DataFrame,
+    config: dict,
+    global_bounds: tuple
+) -> tuple:
+    """Run inference with baseline model (no context needed)."""
+    print(f"\nRunning baseline inference on {len(query_df)} query points...")
+
+    query_coords = query_df[['longitude', 'latitude']].values
+    query_coords_norm = normalize_coords(query_coords, global_bounds)
+    query_embeddings = np.stack(query_df['embedding_patch'].values)
+
+    # Baseline models predict directly on coords and embeddings
+    predictions_norm, uncertainties_norm = model.predict(
+        query_coords_norm,
+        query_embeddings,
+        return_std=True
+    )
+
+    # Get normalization parameters from config
+    agbd_scale = config.get('agbd_scale', 200.0)
+    log_transform = config.get('log_transform_agbd', True)
+
+    # Denormalize predictions to linear space
+    predictions = denormalize_agbd(
+        predictions_norm,
+        agbd_scale=agbd_scale,
+        log_transform=log_transform
+    )
+
+    # Denormalize uncertainties
+    # For baselines, uncertainties are in normalized log space
+    # We need to transform them to linear space
+    if log_transform:
+        # For log-transformed predictions:
+        # std_linear ≈ exp(pred_norm + agbd_scale) * std_norm
+        predictions_linear_scale = np.exp(predictions_norm) * agbd_scale
+        uncertainties = predictions_linear_scale * uncertainties_norm
+    else:
+        uncertainties = uncertainties_norm * agbd_scale
 
     print(f"\nPrediction statistics:")
     print(f"  Mean AGB: {predictions.mean():.2f} Mg/ha")
@@ -317,10 +446,16 @@ def create_visualization(
     uncertainties: np.ndarray,
     lons: np.ndarray,
     lats: np.ndarray,
-    context_df: pd.DataFrame,
+    context_df: Optional[pd.DataFrame],
     output_path: Path,
     region_bbox: tuple
 ):
+    """
+    Create visualization of predictions and uncertainties.
+
+    Note: context_df is currently not used in the visualization but kept
+    for API compatibility. Could be extended to overlay context points.
+    """
     print("\nGenerating visualization...")
 
     n_rows = len(lats)
@@ -378,12 +513,11 @@ def main():
     args = parse_args()
 
     print("=" * 80)
-    print("GEDI NEURAL PROCESS - AGB PREDICTION")
+    print("GEDI AGB PREDICTION")
     print("=" * 80)
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Region: {args.region}")
     print(f"Resolution: {args.resolution}m")
-    print(f"Context shots: {args.n_context}")
     print(f"Device: {args.device}")
     print("=" * 80)
 
@@ -394,20 +528,26 @@ def main():
     region_name = f"region_{min_lon:.3f}_{min_lat:.3f}_{max_lon:.3f}_{max_lat:.3f}"
 
     checkpoint_dir = Path(args.checkpoint)
-    model, config = load_model_and_config(checkpoint_dir, args.device)
+    model, config, model_type = load_model_and_config(checkpoint_dir, args.device)
 
     global_bounds = get_global_bounds(config)
     print(f"\nGlobal coordinate bounds from training:")
     print(f"  Lon: [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}]")
     print(f"  Lat: [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
 
-    context_df = query_context_gedi(
-        tuple(args.region),
-        args.n_context,
-        args.start_time,
-        args.end_time,
-        args.cache_dir
-    )
+    # Only query context GEDI data for Neural Process models
+    context_df = None
+    if model_type == 'neural_process':
+        print(f"Context shots: {args.n_context}")
+        context_df = query_context_gedi(
+            tuple(args.region),
+            args.n_context,
+            args.start_time,
+            args.end_time,
+            args.cache_dir
+        )
+    else:
+        print("Baseline model detected - no context shots needed")
 
     print(f"\nInitializing GeoTessera extractor (year={args.embedding_year})...")
     extractor = EmbeddingExtractor(
@@ -416,14 +556,16 @@ def main():
         cache_dir=args.cache_dir
     )
 
-    context_df = extract_embeddings(
-        context_df,
-        extractor,
-        desc="Extracting context embeddings"
-    )
+    # Extract embeddings for context (Neural Process only)
+    if context_df is not None:
+        context_df = extract_embeddings(
+            context_df,
+            extractor,
+            desc="Extracting context embeddings"
+        )
 
-    if len(context_df) == 0:
-        raise ValueError("No valid context embeddings extracted!")
+        if len(context_df) == 0:
+            raise ValueError("No valid context embeddings extracted!")
 
     lons, lats, n_rows, n_cols = generate_prediction_grid(
         tuple(args.region),
@@ -450,14 +592,23 @@ def main():
     print(f"\nWill predict for {len(query_df):,} valid points "
           f"({100*len(query_df)/(n_rows*n_cols):.1f}% of grid)")
 
-    predictions, uncertainties = run_inference(
-        model,
-        context_df,
-        query_df,
-        global_bounds,
-        args.batch_size,
-        args.device
-    )
+    # Run appropriate inference based on model type
+    if model_type == 'neural_process':
+        predictions, uncertainties = run_inference_neural_process(
+            model,
+            context_df,
+            query_df,
+            global_bounds,
+            args.batch_size,
+            args.device
+        )
+    else:
+        predictions, uncertainties = run_inference_baseline(
+            model,
+            query_df,
+            config,
+            global_bounds
+        )
 
     full_predictions = np.full(n_rows * n_cols, np.nan)
     full_uncertainties = np.full(n_rows * n_cols, np.nan)
@@ -489,10 +640,12 @@ def main():
         "AGB Uncertainty (Mg/ha)"
     )
 
-    save_context_geojson(
-        context_df,
-        output_dir / f"{region_name}_context.geojson"
-    )
+    # Save context geojson only for Neural Process models
+    if context_df is not None:
+        save_context_geojson(
+            context_df,
+            output_dir / f"{region_name}_context.geojson"
+        )
 
     if not args.no_preview:
         create_visualization(
@@ -507,7 +660,8 @@ def main():
     metadata = {
         'region_bbox': args.region,
         'resolution_m': args.resolution,
-        'n_context': len(context_df),
+        'model_type': model_type,
+        'n_context': len(context_df) if context_df is not None else 0,
         'n_predictions': int((~np.isnan(full_predictions)).sum()),
         'grid_size': [n_rows, n_cols],
         'checkpoint': str(checkpoint_dir),
@@ -531,7 +685,8 @@ def main():
     print(f"Files generated:")
     print(f"  - {region_name}_agb_mean.tif")
     print(f"  - {region_name}_agb_std.tif")
-    print(f"  - {region_name}_context.geojson")
+    if context_df is not None:
+        print(f"  - {region_name}_context.geojson")
     if not args.no_preview:
         print(f"  - {region_name}_preview.png")
     print(f"  - {region_name}_metadata.json")
