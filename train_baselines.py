@@ -583,7 +583,6 @@ def main():
                     'n_tiles': int(gedi_df['tile_id'].nunique()),
                 }
 
-                import json
                 with open(cache_path / 'metadata.json', 'w') as f:
                     json.dump(metadata, f, indent=2)
 
