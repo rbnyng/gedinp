@@ -450,6 +450,72 @@ def main():
             config['train_years'] = args.train_years
         save_config(config, output_dir / 'config.json')
 
+        # Save preprocessed data to cache for future reuse
+        if CACHE_AVAILABLE:
+            try:
+                print("\nSaving preprocessed data to cache for future reuse...")
+                from preprocess_data import get_cache_dir, compute_cache_key
+                from datetime import datetime
+
+                # Create mock args for cache computation
+                class PreprocessArgs:
+                    pass
+                pargs = PreprocessArgs()
+                pargs.region_bbox = args.region_bbox
+                pargs.start_time = args.start_time
+                pargs.end_time = args.end_time
+                pargs.embedding_year = args.embedding_year
+                pargs.patch_size = args.patch_size
+                pargs.cache_dir = args.cache_dir
+                pargs.buffer_size = args.buffer_size
+                pargs.val_ratio = args.val_ratio
+                pargs.test_ratio = args.test_ratio
+                pargs.seed = args.seed
+                pargs.train_years = getattr(args, 'train_years', None)
+
+                cache_path = get_cache_dir(pargs)
+                cache_path.mkdir(parents=True, exist_ok=True)
+
+                # Save the data in the same format as preprocess_data.py
+                def prepare_for_parquet(df):
+                    df_copy = df.copy()
+                    df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(
+                        lambda x: x.flatten().tolist() if x is not None else None
+                    )
+                    return df_copy
+
+                prepare_for_parquet(train_df).to_parquet(cache_path / 'train_split.parquet', index=False)
+                prepare_for_parquet(val_df).to_parquet(cache_path / 'val_split.parquet', index=False)
+                prepare_for_parquet(test_df).to_parquet(cache_path / 'test_split.parquet', index=False)
+
+                with open(cache_path / 'processed_data.pkl', 'wb') as f:
+                    pickle.dump(gedi_df, f)
+
+                # Save metadata
+                _, cache_hash, key_params = compute_cache_key(pargs)
+                metadata = {
+                    'timestamp': datetime.now().isoformat(),
+                    'cache_hash': cache_hash,
+                    'parameters': key_params,
+                    'patch_size': args.patch_size,
+                    'global_bounds': list(global_bounds),
+                    'n_total': len(gedi_df),
+                    'n_train': len(train_df),
+                    'n_val': len(val_df),
+                    'n_test': len(test_df),
+                    'n_tiles': int(gedi_df['tile_id'].nunique()),
+                }
+
+                import json
+                with open(cache_path / 'metadata.json', 'w') as f:
+                    json.dump(metadata, f, indent=2)
+
+                print(f"✓ Saved to cache: {cache_path}")
+                print("  Future runs with same parameters will load from this cache\n")
+            except Exception as e:
+                print(f"Warning: Failed to save to cache: {e}")
+                print("Continuing with training...\n")
+
     print("Step 4: Creating datasets...")
     train_dataset = GEDINeuralProcessDataset(
         train_df,
