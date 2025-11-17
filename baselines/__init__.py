@@ -1,3 +1,5 @@
+"""Baseline models for GEDI biomass prediction."""
+
 from .models import (
     RandomForestBaseline,
     XGBoostBaseline,
