@@ -22,6 +22,14 @@ from utils.evaluation import compute_metrics
 from scipy.stats import norm
 from utils.config import save_config, _make_serializable
 
+# Import preprocessing cache utilities
+try:
+    from preprocess_data import check_cache_exists, load_cached_data
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
+    print("Warning: Could not import preprocessing cache utilities")
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train baseline models for GEDI AGBD prediction')
@@ -339,6 +347,58 @@ def train_mlp_dropout(train_coords, train_embeddings, train_agbd, args,
     return model, train_time
 
 
+def try_load_from_cache(args):
+    """
+    Try to load preprocessed data from cache.
+
+    Returns:
+        (gedi_df, train_df, val_df, test_df, global_bounds) if cache hit, None if cache miss
+    """
+    if not CACHE_AVAILABLE:
+        return None
+
+    try:
+        # Create a mock args object compatible with preprocess_data module
+        class PreprocessArgs:
+            pass
+
+        pargs = PreprocessArgs()
+        pargs.region_bbox = args.region_bbox
+        pargs.start_time = args.start_time
+        pargs.end_time = args.end_time
+        pargs.embedding_year = args.embedding_year
+        pargs.patch_size = args.patch_size
+        pargs.cache_dir = args.cache_dir
+        pargs.buffer_size = args.buffer_size
+        pargs.val_ratio = args.val_ratio
+        pargs.test_ratio = args.test_ratio
+        pargs.seed = args.seed
+        pargs.train_years = None  # Baselines don't use temporal filtering
+
+        # Check if cache exists
+        cache_exists, cache_path = check_cache_exists(pargs)
+
+        if cache_exists:
+            print("=" * 80)
+            print("LOADING FROM PREPROCESSED CACHE")
+            print("=" * 80)
+            print(f"Cache location: {cache_path}")
+            print("=" * 80)
+            print()
+
+            # Load cached data
+            gedi_df, train_df, val_df, test_df, global_bounds, metadata = load_cached_data(cache_path)
+
+            return gedi_df, train_df, val_df, test_df, global_bounds
+
+        return None
+
+    except Exception as e:
+        print(f"Warning: Failed to load from cache: {e}")
+        print("Falling back to standard data loading pipeline")
+        return None
+
+
 def main():
     args = parse_args()
     np.random.seed(args.seed)
@@ -356,80 +416,107 @@ def main():
     print(f"Output: {output_dir}")
     print()
 
-    print("Step 1: Querying GEDI data...")
-    querier = GEDIQuerier(cache_dir=args.cache_dir)
-    gedi_df = querier.query_region_tiles(
-        region_bbox=args.region_bbox,
-        tile_size=0.1,
-        start_time=args.start_time,
-        end_time=args.end_time,
-        max_agbd=500.0  # Cap at 500 Mg/ha to remove unrealistic outliers (e.g., 3000+)
-    )
-    print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
-    print()
+    # Try to load from cache first
+    cached_data = try_load_from_cache(args)
 
-    if len(gedi_df) == 0:
-        print("No GEDI data found in region. Exiting.")
-        return
+    if cached_data is not None:
+        # Use cached data
+        gedi_df, train_df, val_df, test_df, global_bounds = cached_data
 
-    print("Step 2: Extracting GeoTessera embeddings...")
-    extractor = EmbeddingExtractor(
-        year=args.embedding_year,
-        patch_size=args.patch_size,
-        cache_dir=args.cache_dir
-    )
-    gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
-    print()
+        # Save splits to output directory for reference
+        def prepare_for_parquet(df):
+            df_copy = df.copy()
+            df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(
+                lambda x: x.flatten().tolist() if x is not None else None
+            )
+            return df_copy
 
-    gedi_df = gedi_df[gedi_df['embedding_patch'].notna()]
-    print(f"Retained {len(gedi_df)} shots with valid embeddings")
-    print()
+        prepare_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=True)
+        prepare_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=True)
+        prepare_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=True)
 
-    with open(output_dir / 'processed_data.pkl', 'wb') as f:
-        pickle.dump(gedi_df, f)
+        with open(output_dir / 'processed_data.pkl', 'wb') as f:
+            pickle.dump(gedi_df, f)
 
-    # Step 3: Spatial split
-    print("Step 3: Creating spatial train/val/test split...")
-    print(f"Using BufferedSpatialSplitter with buffer_size={args.buffer_size}° (~{args.buffer_size*111:.0f}km)")
-    splitter = BufferedSpatialSplitter(
-        gedi_df,
-        buffer_size=args.buffer_size,
-        val_ratio=args.val_ratio,
-        test_ratio=args.test_ratio,
-        random_state=args.seed
-    )
-    train_df, val_df, test_df = splitter.split()
-    print()
+        print(f"Copied splits to output directory: {output_dir}")
+        print()
 
-    # Save splits as Parquet to preserve embedding vectors
-    # Flatten embeddings to 1D arrays to avoid nested structure issues
-    def prepare_for_parquet(df):
-        df_copy = df.copy()
-        # Flatten (H, W, C) embeddings to 1D for Parquet storage
-        df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(
-            lambda x: x.flatten().tolist() if x is not None else None
+    else:
+        # No cache - run full data loading pipeline
+        print("Step 1: Querying GEDI data...")
+        querier = GEDIQuerier(cache_dir=args.cache_dir)
+        gedi_df = querier.query_region_tiles(
+            region_bbox=args.region_bbox,
+            tile_size=0.1,
+            start_time=args.start_time,
+            end_time=args.end_time,
+            max_agbd=500.0  # Cap at 500 Mg/ha to remove unrealistic outliers (e.g., 3000+)
         )
-        return df_copy
+        print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
+        print()
 
-    prepare_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=True)
-    prepare_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=True)
-    prepare_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=True)
+        if len(gedi_df) == 0:
+            print("No GEDI data found in region. Exiting.")
+            return
 
-    print(f"Saved splits to Parquet files with flattened embeddings")
+        print("Step 2: Extracting GeoTessera embeddings...")
+        extractor = EmbeddingExtractor(
+            year=args.embedding_year,
+            patch_size=args.patch_size,
+            cache_dir=args.cache_dir
+        )
+        gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
+        print()
 
-    global_bounds = (
-        train_df['longitude'].min(),
-        train_df['latitude'].min(),
-        train_df['longitude'].max(),
-        train_df['latitude'].max()
-    )
-    print(f"Global bounds: lon [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}], "
-          f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
-    print()
+        gedi_df = gedi_df[gedi_df['embedding_patch'].notna()]
+        print(f"Retained {len(gedi_df)} shots with valid embeddings")
+        print()
 
-    config = vars(args)
-    config['global_bounds'] = list(global_bounds)
-    save_config(config, output_dir / 'config.json')
+        with open(output_dir / 'processed_data.pkl', 'wb') as f:
+            pickle.dump(gedi_df, f)
+
+        # Step 3: Spatial split
+        print("Step 3: Creating spatial train/val/test split...")
+        print(f"Using BufferedSpatialSplitter with buffer_size={args.buffer_size}° (~{args.buffer_size*111:.0f}km)")
+        splitter = BufferedSpatialSplitter(
+            gedi_df,
+            buffer_size=args.buffer_size,
+            val_ratio=args.val_ratio,
+            test_ratio=args.test_ratio,
+            random_state=args.seed
+        )
+        train_df, val_df, test_df = splitter.split()
+        print()
+
+        # Save splits as Parquet to preserve embedding vectors
+        # Flatten embeddings to 1D arrays to avoid nested structure issues
+        def prepare_for_parquet(df):
+            df_copy = df.copy()
+            # Flatten (H, W, C) embeddings to 1D for Parquet storage
+            df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(
+                lambda x: x.flatten().tolist() if x is not None else None
+            )
+            return df_copy
+
+        prepare_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=True)
+        prepare_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=True)
+        prepare_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=True)
+
+        print(f"Saved splits to Parquet files with flattened embeddings")
+
+        global_bounds = (
+            train_df['longitude'].min(),
+            train_df['latitude'].min(),
+            train_df['longitude'].max(),
+            train_df['latitude'].max()
+        )
+        print(f"Global bounds: lon [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}], "
+              f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
+        print()
+
+        config = vars(args)
+        config['global_bounds'] = list(global_bounds)
+        save_config(config, output_dir / 'config.json')
 
     print("Step 4: Preparing data for baseline models...")
 

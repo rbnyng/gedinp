@@ -132,6 +132,42 @@ def generate_seeds(args):
         return list(range(args.base_seed, args.base_seed + args.n_seeds))
 
 
+def run_preprocessing(seed, args):
+    """
+    Run preprocessing script to cache data for this seed.
+    This allows both train.py and train_baselines.py to reuse the same preprocessed data.
+    """
+    print("=" * 80)
+    print(f"PREPROCESSING DATA FOR SEED {seed}")
+    print("=" * 80)
+
+    cmd = [
+        sys.executable, 'preprocess_data.py',
+        '--region_bbox', *[str(x) for x in args.region_bbox],
+        '--start_time', args.start_time,
+        '--end_time', args.end_time,
+        '--embedding_year', str(args.embedding_year),
+        '--cache_dir', args.cache_dir,
+        '--buffer_size', str(args.buffer_size),
+        '--seed', str(seed),
+    ]
+
+    # Add optional patch_size if specified
+    if hasattr(args, 'patch_size'):
+        cmd.extend(['--patch_size', str(args.patch_size)])
+
+    print(f"Executing: {' '.join(cmd)}\n")
+    result = subprocess.run(cmd)
+
+    if result.returncode != 0:
+        print(f"WARNING: Preprocessing failed for seed={seed}")
+        print("Training scripts will fall back to their own data loading")
+        return False
+
+    print(f"Preprocessing completed for seed={seed}")
+    return True
+
+
 def run_training_single_seed(script, seed, output_subdir, args):
     """Run training script with a single seed."""
     print("=" * 80)
@@ -877,6 +913,9 @@ def main():
     durations = []
     start_time_total = datetime.now()
 
+    # Track which seeds have been preprocessed (to avoid duplicate preprocessing in ablation mode)
+    preprocessed_seeds = set()
+
     if args.ablation_mode:
         # Ablation mode: iterate over architectures × seeds
         original_arch_mode = args.architecture_mode
@@ -885,6 +924,14 @@ def main():
 
         for arch in args.architectures:
             for seed in seeds:
+                # Preprocess once per seed (before first architecture uses it)
+                if seed not in preprocessed_seeds:
+                    print(f"\n{'=' * 80}")
+                    print(f"PREPROCESSING SEED {seed} (will be reused by all architectures)")
+                    print(f"{'=' * 80}\n")
+                    run_preprocessing(seed, args)
+                    preprocessed_seeds.add(seed)
+
                 run_num += 1
                 print(f"\n{'=' * 80}")
                 print(f"RUN {run_num}/{total_runs}: {arch.upper()} with seed {seed}")
@@ -911,6 +958,12 @@ def main():
     else:
         # Normal mode: iterate over seeds only
         for i, seed in enumerate(seeds, 1):
+            # Preprocess data once per seed (will be reused if running both train.py and train_baselines.py)
+            print(f"\n{'=' * 80}")
+            print(f"PREPROCESSING SEED {seed}")
+            print(f"{'=' * 80}\n")
+            run_preprocessing(seed, args)
+
             print(f"\n{'=' * 80}")
             print(f"RUN {i}/{len(seeds)}: Seed {seed}")
             print(f"{'=' * 80}\n")
