@@ -26,9 +26,12 @@ from utils.config import save_config, _make_serializable
 try:
     from preprocess_data import check_cache_exists, load_cached_data
     CACHE_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     CACHE_AVAILABLE = False
-    print("Warning: Could not import preprocessing cache utilities")
+    print(f"Warning: Could not import preprocessing cache utilities: {e}")
+except Exception as e:
+    CACHE_AVAILABLE = False
+    print(f"Warning: Error importing preprocessing cache utilities: {e}")
 
 
 def parse_args():
@@ -355,6 +358,7 @@ def try_load_from_cache(args):
         (gedi_df, train_df, val_df, test_df, global_bounds) if cache hit, None if cache miss
     """
     if not CACHE_AVAILABLE:
+        print("Cache not available (preprocess_data module not loaded)")
         return None
 
     try:
@@ -376,6 +380,7 @@ def try_load_from_cache(args):
         pargs.train_years = None  # Baselines don't use temporal filtering
 
         # Check if cache exists
+        print(f"Checking for cached data (seed={args.seed}, region={args.region_bbox})...")
         cache_exists, cache_path = check_cache_exists(pargs)
 
         if cache_exists:
@@ -391,10 +396,14 @@ def try_load_from_cache(args):
 
             return gedi_df, train_df, val_df, test_df, global_bounds
 
+        print(f"No cache found at: {cache_path}")
+        print("Will run full data loading pipeline...")
         return None
 
     except Exception as e:
         print(f"Warning: Failed to load from cache: {e}")
+        import traceback
+        traceback.print_exc()
         print("Falling back to standard data loading pipeline")
         return None
 
