@@ -337,6 +337,13 @@ def main():
         with open(output_dir / 'processed_data.pkl', 'wb') as f:
             pickle.dump(gedi_df, f)
 
+        # Update config with global_bounds from cache
+        config = vars(args)
+        config['global_bounds'] = list(global_bounds)
+        if hasattr(args, 'train_years') and args.train_years is not None:
+            config['train_years'] = args.train_years
+        save_config(config, output_dir / 'config.json')
+
         print(f"Copied splits to output directory: {output_dir}")
         print()
 
