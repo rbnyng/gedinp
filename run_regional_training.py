@@ -6,6 +6,12 @@ Usage:
     
     # Use specific seeds
     python run_regional_training.py --seeds 42 69 9000 1618 54088 777 1314 3 67 80085 --cache_dir ./cache
+    
+    python run_regional_training.py --seeds 42 69 9001 1618 1 777 1314 2 67 6 --cache_dir ./cache
+    
+    
+    
+    python run_regional_training.py --seeds 42 69 12345 1618 1 --cache_dir ./cache
 """
 
 import argparse
@@ -50,6 +56,12 @@ REGIONS = {
         'bbox': [-75, 3, -74, 4],
         'batch_size': 16,
         'description': 'Tropical montane forest, Andean region'
+    },
+    'guaviare': {
+        'name': 'Guaviare, Colombia',
+        'bbox': [-73, 2, -72, 3],
+        'batch_size': 16,
+        'description': ''
     }
 }
 

@@ -63,9 +63,9 @@ def parse_args():
                         help='IDW: number of nearest neighbors')
 
     # MLP arguments
-    parser.add_argument('--mlp_hidden_dims', type=int, nargs='+', default=[512, 256, 128],
+    parser.add_argument('--mlp_hidden_dims', type=int, nargs='+', default=[1024, 512, 256, 128],
                         help='MLP: hidden layer dimensions')
-    parser.add_argument('--mlp_dropout_rate', type=float, default=0.5,
+    parser.add_argument('--mlp_dropout_rate', type=float, default=0.2,
                         help='MLP MC Dropout: dropout rate')
     parser.add_argument('--mlp_learning_rate', type=float, default=5e-4,
                         help='MLP: learning rate')
