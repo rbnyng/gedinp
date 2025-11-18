@@ -7,6 +7,7 @@ python train.py \
   --start_time 2022-01-01 \
   --end_time 2022-12-31 \
   --cache_dir ./cache \
+  --embeddings_dir ./embeddings \
   --output_dir ./outputs \
   --epochs 100 
 
@@ -16,9 +17,10 @@ python run_ablation_study.py \
   --start_time 2022-01-01 \
   --end_time 2022-12-31 \
   --cache_dir ./cache \
+  --embeddings_dir ./embeddings \
   --buffer_size 0.1 \
   --output_dir ./outputs_ablation \
-  --epochs 100 
+  --epochs 100
 
 python train_baselines.py \
   --region_bbox -73 2 -72 3 \
@@ -27,7 +29,8 @@ python train_baselines.py \
   --end_time 2022-12-31 \
     --models xgb \
     --output_dir ./outputs_baselines \
-    --cache_dir ./cache
+    --cache_dir ./cache \
+    --embeddings_dir ./embeddings
 
 python evaluate.py \
   --model_dir ./outputs \
@@ -46,6 +49,7 @@ python run_training_harness.py \
 	--start_time 2022-01-01 \
 	--end_time 2022-12-31 \
 	--cache_dir ./cache \
+	--embeddings_dir ./embeddings \
 	--output_dir ./outputs_np \
 	--epochs 100 \
 	--region_bbox -73 2 -72 3
@@ -69,8 +73,9 @@ python train.py \
   --start_time 2022-01-01 \
   --end_time 2022-12-31 \
   --cache_dir ./cache \
+  --embeddings_dir ./embeddings \
   --output_dir ./outputs \
-  --epochs 100 
+  --epochs 100
 
 python train_baselines.py \
   --region_bbox -73 2 -72 3 \
@@ -79,4 +84,5 @@ python train_baselines.py \
   --end_time 2022-12-31 \
     --models xgb \
     --output_dir ./outputs_baselines \
-    --cache_dir ./cache
+    --cache_dir ./cache \
+    --embeddings_dir ./embeddings

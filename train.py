@@ -40,7 +40,9 @@ def parse_args():
     parser.add_argument('--embedding_year', type=int, default=2022,
                         help='Year of GeoTessera embeddings')
     parser.add_argument('--cache_dir', type=str, default='./cache',
-                        help='Directory for caching tiles and embeddings')
+                        help='Directory for caching GEDI query results')
+    parser.add_argument('--embeddings_dir', type=str, default='./embeddings',
+                        help='Directory where geotessera stores embedding tiles')
 
     # Model arguments
     parser.add_argument('--patch_size', type=int, default=3,
@@ -295,7 +297,7 @@ def main():
     extractor = EmbeddingExtractor(
         year=args.embedding_year,
         patch_size=args.patch_size,
-        cache_dir=args.cache_dir
+        embeddings_dir=args.embeddings_dir
     )
     gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
     print()
