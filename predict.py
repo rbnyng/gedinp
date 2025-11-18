@@ -43,7 +43,9 @@ def parse_args():
     parser.add_argument('--no_preview', action='store_true',
                         help='Disable preview generation')
     parser.add_argument('--cache_dir', type=str, default='./cache',
-                        help='Cache directory for embeddings')
+                        help='Directory for caching GEDI query results')
+    parser.add_argument('--embeddings_dir', type=str, default='./embeddings',
+                        help='Directory where geotessera stores embedding tiles')
     parser.add_argument('--start_time', type=str, default='2022-01-01',
                         help='GEDI query start date (YYYY-MM-DD)')
     parser.add_argument('--end_time', type=str, default='2022-12-31',
@@ -553,7 +555,7 @@ def main():
     extractor = EmbeddingExtractor(
         year=args.embedding_year,
         patch_size=config.get('patch_size', 3),
-        cache_dir=args.cache_dir
+        embeddings_dir=args.embeddings_dir
     )
 
     # Extract embeddings for context (Neural Process only)

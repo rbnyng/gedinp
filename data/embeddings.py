@@ -8,8 +8,6 @@ import numpy as np
 from geotessera import GeoTessera
 from typing import Optional, Tuple, Dict
 import pandas as pd
-from pathlib import Path
-import pickle
 from pyproj import Transformer
 
 
@@ -20,7 +18,7 @@ class EmbeddingExtractor:
         self,
         year: int = 2024,
         patch_size: int = 3,
-        cache_dir: Optional[str] = None
+        embeddings_dir: Optional[str] = None
     ):
         """
         Initialize embedding extractor.
@@ -28,21 +26,22 @@ class EmbeddingExtractor:
         Args:
             year: Year of embeddings to use (2017-2024)
             patch_size: Size of patch to extract around each shot (e.g., 3 = 3x3 = 30m x 30m)
-            cache_dir: Directory to cache downloaded tiles
+            embeddings_dir: Directory where geotessera will store/read embedding tiles.
+                          If provided, geotessera will reuse existing tiles from this directory
+                          and only download missing ones. Expected structure:
+                          embeddings/{year}/grid_{lon}_{lat}.npy and _scales.npy
+                          landmasks/landmask_{lon}_{lat}.tif
         """
-        self.gt = GeoTessera()
+        # Let geotessera handle disk storage with embeddings_dir
+        self.gt = GeoTessera(embeddings_dir=embeddings_dir)
         self.year = year
         self.patch_size = patch_size
-        self.cache_dir = Path(cache_dir) if cache_dir else None
 
-        # Cache for tiles to avoid repeated downloads
+        # Keep in-memory cache for performance (avoids re-reading from disk)
         self.tile_cache: Dict[Tuple[float, float], Tuple[np.ndarray, object, object]] = {}
 
         # Cache for coordinate transformers to avoid repeated creation
         self.transformer_cache: Dict[str, Transformer] = {}
-
-        if self.cache_dir:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_tile_coords(self, lon: float, lat: float) -> Tuple[float, float]:
         """
@@ -69,7 +68,10 @@ class EmbeddingExtractor:
         tile_lat: float
     ) -> Optional[Tuple[np.ndarray, object, object]]:
         """
-        Load a tile from cache or download it.
+        Load a tile from memory cache or fetch from geotessera.
+
+        GeoTessera v0.7.0+ handles disk caching automatically when embeddings_dir is set,
+        so we only maintain an in-memory cache for performance.
 
         Args:
             tile_lon: Tile center longitude
@@ -84,16 +86,7 @@ class EmbeddingExtractor:
         if tile_key in self.tile_cache:
             return self.tile_cache[tile_key]
 
-        # Check disk cache
-        if self.cache_dir:
-            cache_file = self.cache_dir / f"tile_{tile_lon:.2f}_{tile_lat:.2f}_{self.year}.pkl"
-            if cache_file.exists():
-                with open(cache_file, 'rb') as f:
-                    tile_data = pickle.load(f)
-                    self.tile_cache[tile_key] = tile_data
-                    return tile_data
-
-        # Download from GeoTessera
+        # Fetch from GeoTessera (will use embeddings_dir if set, or download to temp)
         try:
             embedding, crs, transform = self.gt.fetch_embedding(
                 lon=tile_lon,
@@ -103,12 +96,6 @@ class EmbeddingExtractor:
 
             tile_data = (embedding, crs, transform)
             self.tile_cache[tile_key] = tile_data
-
-            # Save to disk cache
-            if self.cache_dir:
-                cache_file = self.cache_dir / f"tile_{tile_lon:.2f}_{tile_lat:.2f}_{self.year}.pkl"
-                with open(cache_file, 'wb') as f:
-                    pickle.dump(tile_data, f)
 
             return tile_data
 

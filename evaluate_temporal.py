@@ -37,7 +37,9 @@ def main():
     parser.add_argument('--region_bbox', type=float, nargs=4, default=None,
                         help='Region bounding box (default: use same as training)')
     parser.add_argument('--cache_dir', type=str, default='./cache',
-                        help='Cache directory for embeddings')
+                        help='Directory for caching GEDI query results')
+    parser.add_argument('--embeddings_dir', type=str, default='./embeddings',
+                        help='Directory where geotessera stores embedding tiles')
 
     # Evaluation arguments
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
@@ -120,7 +122,7 @@ def main():
     extractor = EmbeddingExtractor(
         year=config.get('embedding_year', 2024),
         patch_size=config.get('patch_size', 3),
-        cache_dir=args.cache_dir
+        embeddings_dir=args.embeddings_dir
     )
     gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
 
