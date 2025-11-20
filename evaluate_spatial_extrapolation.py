@@ -307,9 +307,18 @@ class SpatialExtrapolationEvaluator:
         # Compute calibration metrics
         calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
 
+        # Rename metrics to include 'log_' prefix (all metrics are in log space)
+        log_metrics = {
+            'log_rmse': metrics['rmse'],
+            'log_mae': metrics['mae'],
+            'log_r2': metrics['r2'],
+        }
+        if 'mean_uncertainty' in metrics:
+            log_metrics['mean_uncertainty'] = metrics['mean_uncertainty']
+
         # Combine metrics
         results = {
-            **metrics,
+            **log_metrics,
             **calib_metrics,
             'train_region': train_region,
             'test_region': test_region,
@@ -363,9 +372,18 @@ class SpatialExtrapolationEvaluator:
         # Compute calibration metrics
         calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
 
+        # Rename metrics to include 'log_' prefix (all metrics are in log space)
+        log_metrics = {
+            'log_rmse': metrics['rmse'],
+            'log_mae': metrics['mae'],
+            'log_r2': metrics['r2'],
+        }
+        if 'mean_uncertainty' in metrics:
+            log_metrics['mean_uncertainty'] = metrics['mean_uncertainty']
+
         # Combine metrics
         results = {
-            **metrics,
+            **log_metrics,
             **calib_metrics,
             'train_region': train_region,
             'test_region': test_region,
