@@ -1,18 +1,5 @@
-#!/usr/bin/env python3
 """
-Spatial Extrapolation Cross-Evaluation
-
-Tests the "Holy Grail" of Neural Processes: graceful handling of out-of-distribution data.
-
-Creates a 4x4 matrix where models trained on region A are tested on region B's test set.
-Compares ANP vs XGBoost to demonstrate that:
-- Both models fail on predictive accuracy (R²) when extrapolating
-- XGBoost UQ crashes (confident but wrong predictions → low coverage)
-- ANP UQ saves the day (recognizes OOD data → high epistemic uncertainty → maintains coverage)
-
 Usage:
-    python evaluate_spatial_extrapolation.py --results_dir ./regional_results
-    python evaluate_spatial_extrapolation.py --results_dir ./regional_results --models anp xgboost
     python evaluate_spatial_extrapolation.py --results_dir ./regional_results --output_dir ./extrapolation_analysis
 """
 
@@ -32,7 +19,6 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
@@ -41,14 +27,12 @@ from baselines.models import XGBoostBaseline
 from utils.evaluation import compute_metrics, compute_calibration_metrics
 from utils.config import load_config
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Region definitions (must match run_regional_training.py)
 REGIONS = {
     'maine': 'Maine (Temperate)',
     'tolima': 'Tolima (Tropical)',
