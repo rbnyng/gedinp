@@ -130,7 +130,7 @@ class SpatialExtrapolationEvaluator:
         )
 
         # Load weights
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(self.device)
         model.eval()
