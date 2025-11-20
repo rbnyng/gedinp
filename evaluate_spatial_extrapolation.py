@@ -499,12 +499,6 @@ class SpatialExtrapolationEvaluator:
             fig = self.create_comparison_heatmap(
                 df, 'coverage_1sigma', '1σ Coverage', cmap='RdYlGn', reverse_cmap=False
             )
-            for ax in fig.axes[:2]:
-                ax.text(
-                    0.5, -0.15, 'Ideal: 0.683',
-                    transform=ax.transAxes,
-                    ha='center', fontsize=10, style='italic'
-                )
             fig.savefig(self.output_dir / 'extrapolation_coverage.png', dpi=300, bbox_inches='tight')
             plt.close(fig)
             logger.info("Saved coverage comparison")
