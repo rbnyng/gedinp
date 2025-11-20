@@ -18,6 +18,105 @@ LOG_SIGMA_MIN = -10.0
 LOG_SIGMA_MAX = 2.0
 
 
+class BasisFunctionEncoder(nn.Module):
+    """
+    Encode coordinates using basis functions for improved spatial representation.
+
+    Supports multiple basis function types:
+    - 'none': Raw coordinates (baseline)
+    - 'fourier_random': Random Fourier features with fixed frequencies
+    - 'fourier_learnable': Learnable Fourier features
+    - 'hybrid': Concatenation of raw coordinates + Fourier features
+    """
+
+    def __init__(
+        self,
+        coord_dim: int = 2,
+        basis_type: str = 'none',
+        num_frequencies: int = 32,
+        frequency_scale: float = 1.0,
+        learnable: bool = False
+    ):
+        """
+        Initialize basis function encoder.
+
+        Args:
+            coord_dim: Input coordinate dimension (2 for lon/lat)
+            basis_type: Type of basis function ('none', 'fourier_random', 'fourier_learnable', 'hybrid')
+            num_frequencies: Number of frequency components for Fourier features
+            frequency_scale: Scale factor for frequency initialization
+            learnable: Whether to make frequencies learnable (for 'fourier_learnable')
+        """
+        super().__init__()
+
+        self.coord_dim = coord_dim
+        self.basis_type = basis_type
+        self.num_frequencies = num_frequencies
+
+        if basis_type == 'none':
+            # Raw coordinates
+            self.output_dim = coord_dim
+            self.frequency_matrix = None
+
+        elif basis_type in ['fourier_random', 'fourier_learnable', 'hybrid']:
+            # Fourier features: [sin(2π B x), cos(2π B x)]
+            # B is (num_frequencies, coord_dim) frequency matrix
+
+            # Initialize frequency matrix from Gaussian distribution
+            B = torch.randn(num_frequencies, coord_dim) * frequency_scale
+
+            if learnable or basis_type == 'fourier_learnable':
+                self.frequency_matrix = nn.Parameter(B)
+            else:
+                self.register_buffer('frequency_matrix', B)
+
+            fourier_dim = 2 * num_frequencies  # sin and cos for each frequency
+
+            if basis_type == 'hybrid':
+                # Concatenate raw coords + Fourier
+                self.output_dim = coord_dim + fourier_dim
+            else:
+                # Only Fourier features
+                self.output_dim = fourier_dim
+        else:
+            raise ValueError(f"Unknown basis_type: {basis_type}")
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        """
+        Encode coordinates using basis functions.
+
+        Args:
+            coords: Input coordinates (batch, coord_dim)
+
+        Returns:
+            Encoded coordinates (batch, output_dim)
+        """
+        if self.basis_type == 'none':
+            return coords
+
+        elif self.basis_type in ['fourier_random', 'fourier_learnable', 'hybrid']:
+            # Compute Fourier features
+            # coords: (batch, coord_dim)
+            # frequency_matrix: (num_frequencies, coord_dim)
+            # proj: (batch, num_frequencies)
+            proj = 2 * torch.pi * torch.matmul(coords, self.frequency_matrix.T)
+
+            # Compute sin and cos
+            fourier_features = torch.cat([
+                torch.sin(proj),
+                torch.cos(proj)
+            ], dim=-1)  # (batch, 2 * num_frequencies)
+
+            if self.basis_type == 'hybrid':
+                # Concatenate raw coordinates
+                return torch.cat([coords, fourier_features], dim=-1)
+            else:
+                return fourier_features
+
+        else:
+            raise ValueError(f"Unknown basis_type: {self.basis_type}")
+
+
 class EmbeddingEncoder(nn.Module):
     """Encode GeoTessera embedding patches into feature vectors."""
 
@@ -96,20 +195,30 @@ class ContextEncoder(nn.Module):
         coord_dim: int = 2,
         embedding_dim: int = 128,
         hidden_dim: int = 256,
-        output_dim: int = 128
+        output_dim: int = 128,
+        basis_function_encoder: Optional[BasisFunctionEncoder] = None
     ):
         """
         Initialize context encoder.
 
         Args:
-            coord_dim: Coordinate dimension (2 for lon/lat)
+            coord_dim: Coordinate dimension (2 for lon/lat) - raw input dimension
             embedding_dim: Embedding feature dimension
             hidden_dim: Hidden layer dimension
             output_dim: Output representation dimension
+            basis_function_encoder: Optional basis function encoder for coordinates
         """
         super().__init__()
 
-        input_dim = coord_dim + embedding_dim + 1  # coords + embedding + agbd
+        self.basis_function_encoder = basis_function_encoder
+
+        # Determine actual coordinate dimension after basis function encoding
+        if basis_function_encoder is not None:
+            actual_coord_dim = basis_function_encoder.output_dim
+        else:
+            actual_coord_dim = coord_dim
+
+        input_dim = actual_coord_dim + embedding_dim + 1  # coords + embedding + agbd
 
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.ln1 = nn.LayerNorm(hidden_dim)
@@ -136,6 +245,10 @@ class ContextEncoder(nn.Module):
         Returns:
             Representations (batch, output_dim)
         """
+        # Apply basis function encoding if provided
+        if self.basis_function_encoder is not None:
+            coords = self.basis_function_encoder(coords)
+
         x = torch.cat([coords, embedding_features, agbd], dim=-1)
 
         # First layer
@@ -169,22 +282,32 @@ class Decoder(nn.Module):
         embedding_dim: int = 128,
         context_dim: int = 128,
         hidden_dim: int = 256,
-        output_uncertainty: bool = True
+        output_uncertainty: bool = True,
+        basis_function_encoder: Optional[BasisFunctionEncoder] = None
     ):
         """
         Initialize decoder.
 
         Args:
-            coord_dim: Coordinate dimension
+            coord_dim: Coordinate dimension (2 for lon/lat) - raw input dimension
             embedding_dim: Embedding feature dimension
             context_dim: Context representation dimension
             hidden_dim: Hidden layer dimension
             output_uncertainty: Whether to output uncertainty estimate
+            basis_function_encoder: Optional basis function encoder for coordinates
         """
         super().__init__()
 
         self.output_uncertainty = output_uncertainty
-        input_dim = coord_dim + embedding_dim + context_dim
+        self.basis_function_encoder = basis_function_encoder
+
+        # Determine actual coordinate dimension after basis function encoding
+        if basis_function_encoder is not None:
+            actual_coord_dim = basis_function_encoder.output_dim
+        else:
+            actual_coord_dim = coord_dim
+
+        input_dim = actual_coord_dim + embedding_dim + context_dim
 
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.ln1 = nn.LayerNorm(hidden_dim)
@@ -216,6 +339,10 @@ class Decoder(nn.Module):
         Returns:
             (mean, log_variance) predictions, where log_variance is None if not output_uncertainty
         """
+        # Apply basis function encoding if provided
+        if self.basis_function_encoder is not None:
+            query_coords = self.basis_function_encoder(query_coords)
+
         x = torch.cat([query_coords, query_embedding_features, context_repr], dim=-1)
 
         # First layer
@@ -384,7 +511,11 @@ class GEDINeuralProcess(nn.Module):
         latent_dim: int = 128,
         output_uncertainty: bool = True,
         architecture_mode: str = 'deterministic',
-        num_attention_heads: int = 4
+        num_attention_heads: int = 4,
+        basis_function_type: str = 'none',
+        basis_num_frequencies: int = 32,
+        basis_frequency_scale: float = 1.0,
+        basis_learnable: bool = False
     ):
         """
         Initialize Neural Process.
@@ -399,6 +530,11 @@ class GEDINeuralProcess(nn.Module):
             output_uncertainty: Whether to predict uncertainty
             architecture_mode: 'deterministic', 'latent', 'anp', or 'cnp'
             num_attention_heads: Number of attention heads
+            basis_function_type: Type of basis function for coordinates
+                ('none', 'fourier_random', 'fourier_learnable', 'hybrid')
+            basis_num_frequencies: Number of Fourier frequencies
+            basis_frequency_scale: Scale for frequency initialization
+            basis_learnable: Whether to make frequencies learnable
         """
         super().__init__()
 
@@ -408,10 +544,25 @@ class GEDINeuralProcess(nn.Module):
         self.output_uncertainty = output_uncertainty
         self.architecture_mode = architecture_mode
         self.latent_dim = latent_dim
+        self.basis_function_type = basis_function_type
 
         # Determine which components to use
         self.use_attention = architecture_mode in ['deterministic', 'anp']
         self.use_latent = architecture_mode in ['latent', 'anp']
+
+        # Create basis function encoder for coordinates
+        if basis_function_type != 'none':
+            self.basis_function_encoder = BasisFunctionEncoder(
+                coord_dim=2,
+                basis_type=basis_function_type,
+                num_frequencies=basis_num_frequencies,
+                frequency_scale=basis_frequency_scale,
+                learnable=basis_learnable
+            )
+            basis_coord_dim = self.basis_function_encoder.output_dim
+        else:
+            self.basis_function_encoder = None
+            basis_coord_dim = 2
 
         # Embedding encoder (shared for context and query)
         self.embedding_encoder = EmbeddingEncoder(
@@ -426,7 +577,8 @@ class GEDINeuralProcess(nn.Module):
             coord_dim=2,
             embedding_dim=embedding_feature_dim,
             hidden_dim=hidden_dim,
-            output_dim=context_repr_dim
+            output_dim=context_repr_dim,
+            basis_function_encoder=self.basis_function_encoder
         )
 
         # Attention aggregator (deterministic path)
@@ -435,8 +587,8 @@ class GEDINeuralProcess(nn.Module):
                 dim=context_repr_dim,
                 num_heads=num_attention_heads
             )
-            # Query projection for attention (coord + embedding -> context_repr_dim)
-            self.query_proj = nn.Linear(2 + embedding_feature_dim, context_repr_dim)
+            # Query projection for attention (basis_coord + embedding -> context_repr_dim)
+            self.query_proj = nn.Linear(basis_coord_dim + embedding_feature_dim, context_repr_dim)
 
         # Latent encoder (stochastic path)
         if self.use_latent:
@@ -459,7 +611,8 @@ class GEDINeuralProcess(nn.Module):
             embedding_dim=embedding_feature_dim,
             context_dim=decoder_context_dim,
             hidden_dim=hidden_dim,
-            output_uncertainty=output_uncertainty
+            output_uncertainty=output_uncertainty,
+            basis_function_encoder=self.basis_function_encoder
         )
 
     def forward(
@@ -507,7 +660,12 @@ class GEDINeuralProcess(nn.Module):
         # Deterministic path (attention or mean pooling)
         if self.use_attention:
             # Query-specific attention aggregation
-            query_repr = torch.cat([query_coords, query_emb_features], dim=-1)
+            # Apply basis function encoding if available
+            if self.basis_function_encoder is not None:
+                query_coords_encoded = self.basis_function_encoder(query_coords)
+            else:
+                query_coords_encoded = query_coords
+            query_repr = torch.cat([query_coords_encoded, query_emb_features], dim=-1)
             query_repr_projected = self.query_proj(query_repr)
             aggregated_context = self.attention_aggregator(
                 query_repr_projected,
