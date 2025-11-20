@@ -276,3 +276,48 @@ class EmbeddingExtractor:
     def clear_cache(self):
         """Clear in-memory tile cache."""
         self.tile_cache.clear()
+
+    @staticmethod
+    def extract_and_filter(
+        df: pd.DataFrame,
+        year: int,
+        patch_size: int = 3,
+        embeddings_dir: Optional[str] = None,
+        verbose: bool = True
+    ) -> pd.DataFrame:
+        """
+        Extract embeddings and filter out invalid patches (convenience method).
+
+        This is a convenience method that combines embedding extraction
+        and filtering into a single call, commonly used across training scripts.
+
+        Args:
+            df: DataFrame with 'longitude' and 'latitude' columns
+            year: Year of embeddings to use (2017-2024)
+            patch_size: Size of patch to extract around each shot (default: 3)
+            embeddings_dir: Directory where geotessera stores embedding tiles
+            verbose: Print progress and statistics (default: True)
+
+        Returns:
+            DataFrame with 'embedding_patch' column, filtered to valid patches only
+
+        Example:
+            >>> gedi_df = EmbeddingExtractor.extract_and_filter(
+            ...     gedi_df,
+            ...     year=2022,
+            ...     embeddings_dir='./embeddings'
+            ... )
+            >>> print(f"Retained {len(gedi_df)} shots with valid embeddings")
+        """
+        extractor = EmbeddingExtractor(
+            year=year,
+            patch_size=patch_size,
+            embeddings_dir=embeddings_dir
+        )
+        df = extractor.extract_patches_batch(df, verbose=verbose)
+        df = df[df['embedding_patch'].notna()]
+
+        if verbose:
+            print(f"Retained {len(df)} shots with valid embeddings")
+
+        return df

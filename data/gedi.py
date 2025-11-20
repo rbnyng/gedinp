@@ -454,3 +454,65 @@ def get_gedi_statistics(df: pd.DataFrame) -> dict:
         stats['shots_per_tile'] = df.groupby('tile_id').size().describe().to_dict()
 
     return stats
+
+
+def load_gedi_data(
+    region_bbox: tuple,
+    start_time: str,
+    end_time: str,
+    cache_dir: str,
+    tile_size: float = 0.1,
+    max_agbd: float = 500.0,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Unified GEDI data loading with standard filtering.
+
+    This is a convenience function that wraps GEDIQuerier with commonly
+    used parameters across training scripts. It queries GEDI data by
+    tiles and applies standard AGBD filtering.
+
+    Args:
+        region_bbox: Region bounding box (min_lon, min_lat, max_lon, max_lat)
+        start_time: Start date for GEDI data (YYYY-MM-DD)
+        end_time: End date for GEDI data (YYYY-MM-DD)
+        cache_dir: Directory for caching GEDI query results
+        tile_size: Tile size in degrees (default: 0.1° for GeoTessera alignment)
+        max_agbd: Maximum AGBD threshold in Mg/ha to remove outliers (default: 500.0)
+        verbose: Print progress and statistics (default: True)
+
+    Returns:
+        DataFrame of GEDI shots with columns: latitude, longitude, agbd, tile_id, etc.
+
+    Raises:
+        ValueError: If no GEDI data found in region
+
+    Example:
+        >>> gedi_df = load_gedi_data(
+        ...     region_bbox=(-122.5, 45.5, -122.0, 46.0),
+        ...     start_time='2022-01-01',
+        ...     end_time='2022-12-31',
+        ...     cache_dir='./cache'
+        ... )
+        >>> print(f"Loaded {len(gedi_df)} shots")
+    """
+    if verbose:
+        logger.info("Querying GEDI data...")
+
+    querier = GEDIQuerier(cache_dir=cache_dir)
+    gedi_df = querier.query_region_tiles(
+        region_bbox=region_bbox,
+        tile_size=tile_size,
+        start_time=start_time,
+        end_time=end_time,
+        max_agbd=max_agbd
+    )
+
+    if verbose:
+        n_tiles = gedi_df['tile_id'].nunique() if 'tile_id' in gedi_df.columns else 'N/A'
+        logger.info(f"Retrieved {len(gedi_df)} GEDI shots across {n_tiles} tiles")
+
+    if len(gedi_df) == 0:
+        raise ValueError("No GEDI data found in region")
+
+    return gedi_df

@@ -10,9 +10,10 @@ from torch.utils.data import DataLoader
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from data.gedi import GEDIQuerier
+from data.gedi import load_gedi_data
 from data.embeddings import EmbeddingExtractor
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
+from utils.data_processing import prepare_embeddings_for_parquet
 from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
 from models.neural_process import (
     GEDINeuralProcess,
@@ -235,15 +236,15 @@ def main():
     print()
 
     print("Step 1: Querying GEDI data...")
-    querier = GEDIQuerier(cache_dir=args.cache_dir)
-    gedi_df = querier.query_region_tiles(
+    gedi_df = load_gedi_data(
         region_bbox=args.region_bbox,
-        tile_size=0.1,
         start_time=args.start_time,
         end_time=args.end_time,
-        max_agbd=500.0  # cap at 500 to remove unrealistic outliers
+        cache_dir=args.cache_dir,
+        tile_size=0.1,
+        max_agbd=500.0,  # cap at 500 to remove unrealistic outliers
+        verbose=True
     )
-    print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
 
     if args.train_years is not None:
         print(f"\nApplying temporal filtering: using only years {args.train_years} for training")
@@ -278,16 +279,13 @@ def main():
         return
 
     print("Step 2: Extracting GeoTessera embeddings...")
-    extractor = EmbeddingExtractor(
+    gedi_df = EmbeddingExtractor.extract_and_filter(
+        gedi_df,
         year=args.embedding_year,
         patch_size=args.patch_size,
-        embeddings_dir=args.embeddings_dir
+        embeddings_dir=args.embeddings_dir,
+        verbose=True
     )
-    gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
-    print()
-
-    gedi_df = gedi_df[gedi_df['embedding_patch'].notna()]
-    print(f"Retained {len(gedi_df)} shots with valid embeddings")
     print()
 
     with open(output_dir / 'processed_data.pkl', 'wb') as f:
@@ -305,16 +303,9 @@ def main():
     train_df, val_df, test_df = splitter.split()
     print()
 
-    def prepare_for_parquet(df):
-        df_copy = df.copy()
-        df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(
-            lambda x: x.flatten().tolist() if x is not None else None
-        )
-        return df_copy
-
-    prepare_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=False)
-    prepare_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=False)
-    prepare_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=False)
+    prepare_embeddings_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=False)
+    prepare_embeddings_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=False)
+    prepare_embeddings_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=False)
 
     print(f"Saved splits to Parquet files with flattened embeddings")
 

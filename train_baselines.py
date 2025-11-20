@@ -8,9 +8,10 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from data.gedi import GEDIQuerier
+from data.gedi import load_gedi_data
 from data.embeddings import EmbeddingExtractor
 from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
+from utils.data_processing import prepare_embeddings_for_parquet
 from baselines import (
     RandomForestBaseline,
     XGBoostBaseline,
@@ -18,7 +19,7 @@ from baselines import (
     MLPBaseline
 )
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
-from utils.evaluation import compute_metrics
+from utils.evaluation import compute_metrics, compute_calibration_metrics
 from scipy.stats import norm
 from utils.config import save_config, _make_serializable
 
@@ -125,26 +126,6 @@ def prepare_data(df, log_transform=True, agbd_scale=200.0, patch_size=3, embeddi
     agbd = normalize_agbd(agbd, agbd_scale=agbd_scale, log_transform=log_transform)
 
     return coords, embeddings, agbd
-
-
-def compute_calibration_metrics(predictions, targets, stds):
-    z_scores = (targets - predictions) / (stds + 1e-8)
-
-    z_mean = np.mean(z_scores)
-    z_std = np.std(z_scores)
-
-    abs_z = np.abs(z_scores)
-    coverage_1sigma = np.sum(abs_z <= 1.0) / len(z_scores) * 100
-    coverage_2sigma = np.sum(abs_z <= 2.0) / len(z_scores) * 100
-    coverage_3sigma = np.sum(abs_z <= 3.0) / len(z_scores) * 100
-
-    return {
-        'z_mean': z_mean,
-        'z_std': z_std,
-        'coverage_1sigma': coverage_1sigma,
-        'coverage_2sigma': coverage_2sigma,
-        'coverage_3sigma': coverage_3sigma,
-    }
 
 
 def print_calibration_metrics(metrics, prefix=""):
@@ -308,15 +289,15 @@ def main():
     print()
 
     print("Step 1: Querying GEDI data...")
-    querier = GEDIQuerier(cache_dir=args.cache_dir)
-    gedi_df = querier.query_region_tiles(
+    gedi_df = load_gedi_data(
         region_bbox=args.region_bbox,
-        tile_size=0.1,
         start_time=args.start_time,
         end_time=args.end_time,
-        max_agbd=500.0  # Cap at 500 Mg/ha to remove unrealistic outliers (e.g., 3000+)
+        cache_dir=args.cache_dir,
+        tile_size=0.1,
+        max_agbd=500.0,  # Cap at 500 Mg/ha to remove unrealistic outliers (e.g., 3000+)
+        verbose=True
     )
-    print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
     print()
 
     if len(gedi_df) == 0:
@@ -324,16 +305,13 @@ def main():
         return
 
     print("Step 2: Extracting GeoTessera embeddings...")
-    extractor = EmbeddingExtractor(
+    gedi_df = EmbeddingExtractor.extract_and_filter(
+        gedi_df,
         year=args.embedding_year,
         patch_size=args.patch_size,
-        embeddings_dir=args.embeddings_dir
+        embeddings_dir=args.embeddings_dir,
+        verbose=True
     )
-    gedi_df = extractor.extract_patches_batch(gedi_df, verbose=True)
-    print()
-
-    gedi_df = gedi_df[gedi_df['embedding_patch'].notna()]
-    print(f"Retained {len(gedi_df)} shots with valid embeddings")
     print()
 
     with open(output_dir / 'processed_data.pkl', 'wb') as f:
@@ -354,16 +332,9 @@ def main():
 
     # save splits as parquet to preserve embedding vectors
     # flatten embeddings to 1D arrays to avoid nested structure issues
-    def prepare_for_parquet(df):
-        df_copy = df.copy()
-        df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(
-            lambda x: x.flatten().tolist() if x is not None else None
-        )
-        return df_copy
-
-    prepare_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=True)
-    prepare_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=True)
-    prepare_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=True)
+    prepare_embeddings_for_parquet(train_df).to_parquet(output_dir / 'train_split.parquet', index=True)
+    prepare_embeddings_for_parquet(val_df).to_parquet(output_dir / 'val_split.parquet', index=True)
+    prepare_embeddings_for_parquet(test_df).to_parquet(output_dir / 'test_split.parquet', index=True)
 
     print(f"Saved splits to Parquet files with flattened embeddings")
 

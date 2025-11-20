@@ -32,7 +32,7 @@ from tqdm import tqdm
 from baselines import RandomForestBaseline, XGBoostBaseline
 from data.spatial_cv import BufferedSpatialSplitter
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
-from utils.evaluation import compute_metrics
+from utils.evaluation import compute_metrics, compute_calibration_metrics
 
 
 def parse_args():
@@ -68,29 +68,6 @@ def parse_args():
                         help='Resume from existing results (skip already computed configs)')
 
     return parser.parse_args()
-
-
-def compute_calibration_metrics(predictions, targets, stds):
-    z_scores = (targets - predictions) / (stds + 1e-8)
-
-    z_mean = np.mean(z_scores)
-    z_std = np.std(z_scores)
-
-    abs_z = np.abs(z_scores)
-    coverage_1sigma = np.sum(abs_z <= 1.0) / len(z_scores) * 100
-    coverage_2sigma = np.sum(abs_z <= 2.0) / len(z_scores) * 100
-    coverage_3sigma = np.sum(abs_z <= 3.0) / len(z_scores) * 100
-
-    calibration_error = abs(z_std - 1.0)
-
-    return {
-        'z_mean': z_mean,
-        'z_std': z_std,
-        'calibration_error': calibration_error,
-        'coverage_1sigma': coverage_1sigma,
-        'coverage_2sigma': coverage_2sigma,
-        'coverage_3sigma': coverage_3sigma,
-    }
 
 
 def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_transform=True):
