@@ -85,6 +85,9 @@ def plot_pareto_frontier(df, args):
     }
     y_label = y_label_map[args.y_metric]
 
+    # X-axis is log_rmse (not test_log_rmse)
+    x_col = 'log_rmse_mean'
+
     # Reference values for calibration metrics
     y_reference = {
         'z_std': 1.0,
@@ -135,7 +138,7 @@ def plot_pareto_frontier(df, args):
 
             # Plot all points
             ax.scatter(
-                model_df['test_log_rmse_mean'],
+                model_df[x_col],
                 model_df[y_col],
                 c=model_colors.get(model, '#666666'),
                 label=model_labels.get(model, model),
@@ -149,12 +152,12 @@ def plot_pareto_frontier(df, args):
             if args.show_pareto:
                 pareto_df = compute_pareto_frontier(
                     model_df,
-                    'test_log_rmse_mean',
+                    x_col,
                     y_col,
                     minimize_both=minimize_both
                 )
                 ax.plot(
-                    pareto_df['test_log_rmse_mean'],
+                    pareto_df[x_col],
                     pareto_df[y_col],
                     c=model_colors.get(model, '#666666'),
                     linestyle='--',
@@ -175,7 +178,7 @@ def plot_pareto_frontier(df, args):
             )
 
         # Labels and formatting
-        ax.set_xlabel('Test Log RMSE (lower = better)', fontsize=11, fontweight='bold')
+        ax.set_xlabel('Log RMSE (lower = better)', fontsize=11, fontweight='bold')
         ax.set_ylabel(y_label, fontsize=11, fontweight='bold')
         ax.set_title(title, fontsize=13, fontweight='bold', pad=10)
 
@@ -208,7 +211,7 @@ def print_summary_statistics(df):
     for model in df['model_type'].unique():
         model_df = df[df['model_type'] == model]
         print(f"\n{model.upper()} (n={len(model_df)} configs):")
-        print(f"  Test Log RMSE:     {model_df['test_log_rmse_mean'].min():.4f} - {model_df['test_log_rmse_mean'].max():.4f}")
+        print(f"  Log RMSE:          {model_df['log_rmse_mean'].min():.4f} - {model_df['log_rmse_mean'].max():.4f}")
         print(f"  Z-Score Std:       {model_df['z_std_mean'].min():.4f} - {model_df['z_std_mean'].max():.4f}")
         print(f"  Calibration Error: {model_df['calibration_error_mean'].min():.4f} - {model_df['calibration_error_mean'].max():.4f}")
         print(f"  Coverage 1-sigma:  {model_df['coverage_1sigma_mean'].min():.1f}% - {model_df['coverage_1sigma_mean'].max():.1f}%")
@@ -219,15 +222,15 @@ def print_summary_statistics(df):
         best_calib = model_df.loc[best_calib_idx]
         print(f"\n  Best Calibration Config:")
         print(f"    max_depth={best_calib['config_max_depth']}, n_estimators={best_calib['config_n_estimators']}")
-        print(f"    Test Log RMSE: {best_calib['test_log_rmse_mean']:.4f}")
+        print(f"    Log RMSE: {best_calib['log_rmse_mean']:.4f}")
         print(f"    Z-Score Std: {best_calib['z_std_mean']:.4f}")
 
         # Best accuracy
-        best_acc_idx = model_df['test_log_rmse_mean'].idxmin()
+        best_acc_idx = model_df['log_rmse_mean'].idxmin()
         best_acc = model_df.loc[best_acc_idx]
         print(f"\n  Best Accuracy Config:")
         print(f"    max_depth={best_acc['config_max_depth']}, n_estimators={best_acc['config_n_estimators']}")
-        print(f"    Test Log RMSE: {best_acc['test_log_rmse_mean']:.4f}")
+        print(f"    Log RMSE: {best_acc['log_rmse_mean']:.4f}")
         print(f"    Z-Score Std: {best_acc['z_std_mean']:.4f}")
 
     print("\n" + "="*80 + "\n")
