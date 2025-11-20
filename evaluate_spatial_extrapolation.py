@@ -146,9 +146,19 @@ class SpatialExtrapolationEvaluator:
             logger.warning(f"Baselines directory not found for {region}: {region_dir}")
             return None
 
-        model_path = region_dir / 'xgboost.pkl'
-        config_path = region_dir / 'config.json'
-
+        # Look for seed directories or direct model file
+        seed_dirs = list(region_dir.glob('seed_*'))
+ 
+        if seed_dirs:
+            # Use first seed (or best seed if we track that)
+            model_dir = seed_dirs[0]
+            logger.info(f"Loading XGBoost model from seed directory: {model_dir}")
+        else:
+            model_dir = region_dir
+ 
+        model_path = model_dir / 'xgboost.pkl'
+        config_path = model_dir / 'config.json'
+        
         if not model_path.exists():
             logger.warning(f"XGBoost model not found: {model_path}")
             return None
