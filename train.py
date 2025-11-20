@@ -61,17 +61,6 @@ def parse_args():
                              'latent (stochastic only), anp (both), cnp (baseline)')
     parser.add_argument('--num_attention_heads', type=int, default=16,
                         help='Number of attention heads')
-    parser.add_argument('--basis_function_type', type=str, default='none',
-                        choices=['none', 'fourier_random', 'fourier_learnable', 'hybrid'],
-                        help='Type of basis function for coordinate encoding: '
-                             'none (raw coords), fourier_random (fixed Fourier), '
-                             'fourier_learnable (learnable Fourier), hybrid (raw + Fourier)')
-    parser.add_argument('--basis_num_frequencies', type=int, default=32,
-                        help='Number of Fourier frequency components')
-    parser.add_argument('--basis_frequency_scale', type=float, default=1.0,
-                        help='Scale factor for Fourier frequency initialization')
-    parser.add_argument('--basis_learnable', action='store_true',
-                        help='Make Fourier frequencies learnable')
 
     # Training arguments
     parser.add_argument('--batch_size', type=int, default=16,
