@@ -25,6 +25,9 @@ def parse_args():
                         help='Path to ANP statistics.csv from run_training_harness.py (optional)')
     parser.add_argument('--output', type=str, default='pareto_frontier.png',
                         help='Output plot filename')
+    parser.add_argument('--x_metric', type=str, default='log_rmse',
+                        choices=['log_rmse', 'log_r2', 'log_mae', 'linear_rmse', 'linear_mae'],
+                        help='X-axis metric: log_rmse (default), log_r2, log_mae, linear_rmse, linear_mae')
     parser.add_argument('--y_metric', type=str, default='z_std',
                         choices=['z_std', 'calibration_error', 'coverage_1sigma', 'log_z_std'],
                         help='Y-axis metric: z_std (default), log_z_std, calibration_error, or coverage_1sigma')
@@ -151,6 +154,20 @@ def compute_pareto_frontier(df, x_col, y_col, minimize_both=True):
 def plot_pareto_frontier(df, args):
     """Create Pareto frontier visualization."""
 
+    # Setup x-axis metric and labels
+    x_col = f'{args.x_metric}_mean'
+    x_label_map = {
+        'log_rmse': 'Log RMSE (lower = better)',
+        'log_r2': 'Log R² (higher = better)',
+        'log_mae': 'Log MAE (lower = better)',
+        'linear_rmse': 'Linear RMSE (Mg/ha, lower = better)',
+        'linear_mae': 'Linear MAE (Mg/ha, lower = better)',
+    }
+    x_label = x_label_map[args.x_metric]
+
+    # Determine if we minimize or maximize x-axis
+    x_minimize = args.x_metric != 'log_r2'  # R² is maximized, others minimized
+
     # Setup y-axis metric and labels
     if args.y_metric == 'log_z_std':
         # Compute log(z_std) on the fly
@@ -173,9 +190,6 @@ def plot_pareto_frontier(df, args):
             'coverage_1sigma': 68.3
         }
         y_reference_val = y_reference.get(args.y_metric)
-
-    # X-axis is log_rmse (not test_log_rmse)
-    x_col = 'log_rmse_mean'
 
     # Auto-enable log scale if z_std range is wide
     use_log_y = args.log_y
@@ -276,12 +290,25 @@ def plot_pareto_frontier(df, args):
 
             # Plot Pareto frontier (skip for ANP since it's usually a single point)
             if args.show_pareto and not is_anp and len(model_df) > 1:
-                pareto_df = compute_pareto_frontier(
-                    model_df,
-                    x_col,
-                    y_col,
-                    minimize_both=minimize_both
-                )
+                # For R², we want to maximize, so negate for Pareto computation
+                if not x_minimize:
+                    model_df_pareto = model_df.copy()
+                    model_df_pareto[x_col] = -model_df_pareto[x_col]
+                    pareto_df = compute_pareto_frontier(
+                        model_df_pareto,
+                        x_col,
+                        y_col,
+                        minimize_both=minimize_both
+                    )
+                    # Negate back for plotting
+                    pareto_df[x_col] = -pareto_df[x_col]
+                else:
+                    pareto_df = compute_pareto_frontier(
+                        model_df,
+                        x_col,
+                        y_col,
+                        minimize_both=minimize_both
+                    )
                 ax.plot(
                     pareto_df[x_col],
                     pareto_df[y_col],
@@ -304,7 +331,7 @@ def plot_pareto_frontier(df, args):
             )
 
         # Labels and formatting
-        ax.set_xlabel('Log RMSE (lower = better)', fontsize=11, fontweight='bold')
+        ax.set_xlabel(x_label, fontsize=11, fontweight='bold')
         ax.set_ylabel(y_label, fontsize=11, fontweight='bold')
         ax.set_title(title, fontsize=13, fontweight='bold', pad=10)
 
@@ -512,6 +539,7 @@ def main():
 
     if args.plot_type == 'calibration':
         print(f"\nGenerating calibration Pareto frontier plot...")
+        print(f"  X-axis metric: {args.x_metric}")
         print(f"  Y-axis metric: {args.y_metric}")
         print(f"  Layout: {'Combined' if args.combined else 'Separate panels'}")
         print(f"  Show frontier: {args.show_pareto}")
@@ -545,6 +573,7 @@ def main():
 
         # Calibration plot
         print(f"\n  Calibration plot:")
+        print(f"    X-axis metric: {args.x_metric}")
         print(f"    Y-axis metric: {args.y_metric}")
         print(f"    Encode time: {args.encode_time}")
         fig1 = plot_pareto_frontier(df, args)
