@@ -114,7 +114,52 @@ python plot_pareto_frontier.py \
 
 ## Advanced Options
 
-### Use log(z_std) Instead of z_std
+### Use R² Instead of RMSE (X-axis)
+
+```bash
+python plot_pareto_frontier.py \
+    --input outputs_pareto/pareto_results.csv \
+    --output figures/pareto_r2.png \
+    --x_metric log_r2 \
+    --show_pareto
+```
+
+**Why use this:**
+- More intuitive for some audiences (higher = better)
+- R² directly shows proportion of variance explained
+- Easier to compare with literature that reports R²
+- Note: Pareto frontier automatically handles maximization
+
+**Interpreting R²:**
+- X-axis now goes left-to-right as worse-to-better (opposite of RMSE)
+- Points on the right = better accuracy
+- Frontier shows the best calibration for each R² level
+
+**Available x-axis metrics:**
+- `log_rmse` (default): Log-scale RMSE, minimize
+- `log_r2`: Log-scale R², maximize
+- `log_mae`: Log-scale MAE, minimize (more robust to outliers)
+- `linear_rmse`: Physical units (Mg/ha RMSE), minimize
+- `linear_mae`: Physical units (Mg/ha MAE), minimize
+
+### Use Physical Units (Mg/ha)
+
+```bash
+python plot_pareto_frontier.py \
+    --input outputs_pareto/pareto_results.csv \
+    --output figures/pareto_mgha.png \
+    --x_metric linear_rmse \
+    --show_pareto
+```
+
+**Why use this:**
+- Domain experts think in Mg/ha, not log-scale
+- Easier for stakeholders to understand error magnitude
+- "10 Mg/ha error" is more interpretable than "0.22 log RMSE"
+
+---
+
+### Use log(z_std) Instead of z_std (Y-axis)
 
 ```bash
 python plot_pareto_frontier.py \
@@ -183,6 +228,43 @@ python plot_pareto_frontier.py \
 ```
 
 This puts RF, XGB, and ANP all on one plot - great for talks!
+
+---
+
+### Combining X and Y Metric Choices
+
+**For domain experts (physical units + coverage):**
+```bash
+python plot_pareto_frontier.py \
+    --input outputs_pareto/pareto_results.csv \
+    --x_metric linear_rmse \
+    --y_metric coverage_1sigma \
+    --show_pareto \
+    --output figures/pareto_domain.png
+```
+Shows: "How much 1-sigma coverage do I get for each Mg/ha error level?"
+
+**For ML researchers (R² + log calibration):**
+```bash
+python plot_pareto_frontier.py \
+    --input outputs_pareto/pareto_results.csv \
+    --x_metric log_r2 \
+    --y_metric log_z_std \
+    --show_pareto \
+    --output figures/pareto_ml.png
+```
+Shows: Symmetric calibration metric with familiar accuracy metric
+
+**For robust analysis (MAE + calibration error):**
+```bash
+python plot_pareto_frontier.py \
+    --input outputs_pareto/pareto_results.csv \
+    --x_metric log_mae \
+    --y_metric calibration_error \
+    --show_pareto \
+    --output figures/pareto_robust.png
+```
+Shows: Metrics less sensitive to outliers
 
 ---
 
