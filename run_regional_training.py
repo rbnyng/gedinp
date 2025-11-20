@@ -29,12 +29,6 @@ REGIONS = {
         'batch_size': 4, # smaller due to region size
         'description': 'Alpine coniferous forest, European Alps'
     },
-    'ili': {
-        'name': 'Ili, Xinjiang, China',
-        'bbox': [86, 42.8, 87, 43.5],
-        'batch_size': 16,
-        'description': 'Arid continental forest, Central Asia'
-    },
     'hokkaido': {
         'name': 'Hokkaido, Japan',
         'bbox': [143.8, 43.2, 144.8, 43.9],
@@ -84,7 +78,7 @@ def parse_args():
                         help='Skip baseline training (only run ANP)')
     parser.add_argument('--baseline_models', nargs='+',
                         default=['rf', 'xgb', 'idw', 'mlp-dropout'],
-                        choices=['rf', 'xgb', 'idw', 'lr', 'mlp-dropout', 'mlp-ensemble'],
+                        choices=['rf', 'xgb', 'idw', 'mlp-dropout'],
                         help='Which baseline models to train')
 
     # Common training arguments
