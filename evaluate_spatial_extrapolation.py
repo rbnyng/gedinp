@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import logging
+import pickle
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -35,8 +36,8 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent))
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from models.anp import AttentiveNeuralProcess
-from baselines.models import XGBoostModel
+from models.neural_process import GEDINeuralProcess
+from baselines.models import XGBoostBaseline
 from utils.evaluation import compute_metrics, compute_calibration_metrics
 from utils.config import load_config
 
@@ -81,7 +82,7 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Results directory: {self.results_dir}")
         logger.info(f"Output directory: {self.output_dir}")
 
-    def load_anp_model(self, region: str) -> Optional[Tuple[AttentiveNeuralProcess, dict]]:
+    def load_anp_model(self, region: str) -> Optional[Tuple[GEDINeuralProcess, dict]]:
         """Load ANP model for a region."""
         # Try to find best model across seeds
         region_dir = self.results_dir / region / 'anp'
@@ -116,14 +117,16 @@ class SpatialExtrapolationEvaluator:
             config = json.load(f)
 
         # Initialize model
-        model = AttentiveNeuralProcess(
-            x_dim=config['x_dim'],
-            y_dim=config['y_dim'],
-            r_dim=config['r_dim'],
-            z_dim=config['z_dim'],
-            hidden_dim=config['hidden_dim'],
-            num_heads=config.get('num_heads', 4),
-            dropout=config.get('dropout', 0.0)
+        model = GEDINeuralProcess(
+            patch_size=config.get('patch_size', 3),
+            embedding_channels=128,
+            embedding_feature_dim=config.get('embedding_feature_dim', 128),
+            context_repr_dim=config.get('context_repr_dim', 128),
+            hidden_dim=config.get('hidden_dim', 512),
+            latent_dim=config.get('latent_dim', 128),
+            output_uncertainty=True,
+            architecture_mode=config.get('architecture_mode', 'deterministic'),
+            num_attention_heads=config.get('num_attention_heads', 4)
         )
 
         # Load weights
@@ -135,7 +138,7 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Loaded ANP model for {region} from {checkpoint_path}")
         return model, config
 
-    def load_xgboost_model(self, region: str) -> Optional[Tuple[XGBoostModel, dict]]:
+    def load_xgboost_model(self, region: str) -> Optional[Tuple[XGBoostBaseline, dict]]:
         """Load XGBoost model for a region."""
         region_dir = self.results_dir / region / 'baselines'
 
@@ -159,8 +162,8 @@ class SpatialExtrapolationEvaluator:
             config = json.load(f)
 
         # Load model
-        model = XGBoostModel()
-        model.load(model_path)
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
 
         logger.info(f"Loaded XGBoost model for {region} from {model_path}")
         return model, config
@@ -210,7 +213,7 @@ class SpatialExtrapolationEvaluator:
 
     def evaluate_anp_on_region(
         self,
-        model: AttentiveNeuralProcess,
+        model: GEDINeuralProcess,
         dataloader: DataLoader,
         train_region: str,
         test_region: str
@@ -224,19 +227,36 @@ class SpatialExtrapolationEvaluator:
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc=f"ANP {train_region}→{test_region}"):
-                # Move to device
-                context_x = batch['context_x'].to(self.device)
-                context_y = batch['context_y'].to(self.device)
-                target_x = batch['target_x'].to(self.device)
-                target_y = batch['target_y'].to(self.device)
+                # Process each tile in the batch (batch is list of tiles)
+                for i in range(len(batch['context_coords'])):
+                    # Get data for this tile
+                    context_coords = batch['context_coords'][i].to(self.device)
+                    context_embeddings = batch['context_embeddings'][i].to(self.device)
+                    context_agbd = batch['context_agbd'][i].to(self.device)
+                    target_coords = batch['target_coords'][i].to(self.device)
+                    target_embeddings = batch['target_embeddings'][i].to(self.device)
+                    target_agbd = batch['target_agbd'][i].to(self.device)
 
-                # Forward pass
-                mu, sigma = model(context_x, context_y, target_x)
+                    # Forward pass
+                    pred_mean, pred_log_var, _, _ = model(
+                        context_coords,
+                        context_embeddings,
+                        context_agbd,
+                        target_coords,
+                        target_embeddings,
+                        training=False
+                    )
 
-                # Collect predictions
-                all_preds.append(mu.cpu().numpy())
-                all_targets.append(target_y.cpu().numpy())
-                all_uncertainties.append(sigma.cpu().numpy())
+                    # Convert log_var to std
+                    if pred_log_var is not None:
+                        pred_std = torch.exp(0.5 * pred_log_var)
+                    else:
+                        pred_std = torch.zeros_like(pred_mean)
+
+                    # Collect predictions
+                    all_preds.append(pred_mean.cpu().numpy())
+                    all_targets.append(target_agbd.cpu().numpy())
+                    all_uncertainties.append(pred_std.cpu().numpy())
 
         # Concatenate
         preds = np.concatenate(all_preds, axis=0).squeeze()
@@ -263,7 +283,7 @@ class SpatialExtrapolationEvaluator:
 
     def evaluate_xgboost_on_region(
         self,
-        model: XGBoostModel,
+        model: XGBoostBaseline,
         dataloader: DataLoader,
         train_region: str,
         test_region: str
@@ -276,26 +296,23 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Evaluating XGBoost {train_region} → {test_region}")
 
         for batch in tqdm(dataloader, desc=f"XGB {train_region}→{test_region}"):
-            # Extract features for XGBoost (concatenate context_x and target_x)
-            # XGBoost doesn't use context/target structure, just raw features
-            context_x = batch['context_x']
-            target_x = batch['target_x']
-            target_y = batch['target_y']
+            # Process each tile in the batch (batch is list of tiles)
+            for i in range(len(batch['target_coords'])):
+                # Get data for this tile (only need target points for XGBoost)
+                target_coords = batch['target_coords'][i].cpu().numpy()
+                target_embeddings = batch['target_embeddings'][i].cpu().numpy()
+                target_agbd = batch['target_agbd'][i].cpu().numpy()
 
-            # Flatten batch dimension and spatial dimensions
-            # Shape: (batch, num_points, feature_dim) → (total_points, feature_dim)
-            batch_size, num_target, feat_dim = target_x.shape
+                # Predict using XGBoost
+                preds, uncertainties = model.predict(
+                    target_coords,
+                    target_embeddings,
+                    return_std=True
+                )
 
-            # Use target features for prediction
-            X = target_x.reshape(-1, feat_dim).numpy()
-            y = target_y.reshape(-1).numpy()
-
-            # Predict
-            preds, uncertainties = model.predict(X, return_std=True)
-
-            all_preds.append(preds)
-            all_targets.append(y)
-            all_uncertainties.append(uncertainties)
+                all_preds.append(preds)
+                all_targets.append(target_agbd.squeeze())
+                all_uncertainties.append(uncertainties)
 
         # Concatenate
         preds = np.concatenate(all_preds, axis=0)
