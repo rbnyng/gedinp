@@ -181,8 +181,10 @@ class SpatialExtrapolationEvaluator:
         seed_dirs = list(region_dir.glob('seed_*'))
         if seed_dirs:
             test_split_path = seed_dirs[0] / 'test_split.parquet'
+            config_path = seed_dirs[0] / 'config.json'
         else:
             test_split_path = region_dir / 'test_split.parquet'
+            config_path = region_dir / 'config.json'
 
         if not test_split_path.exists():
             logger.warning(f"Test split not found: {test_split_path}")
@@ -191,12 +193,23 @@ class SpatialExtrapolationEvaluator:
         # Load parquet
         df = pd.read_parquet(test_split_path)
 
-        # Create dataset
+        # Load config to get global bounds
+        global_bounds = None
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                global_bounds = config.get('global_bounds', None)
+
+        # Create dataset - use fixed context ratio for evaluation
+        # Set context_ratio_range to (0.5, 0.5) for deterministic splits
         dataset = GEDINeuralProcessDataset(
-            df=df,
-            max_num_context=self.num_context,
-            max_num_target=1000,  # Use all test points as targets
-            normalize_coords=True
+            data_df=df,
+            min_shots_per_tile=2,
+            context_ratio_range=(0.5, 0.5),  # Fixed 50/50 split
+            normalize_coords=True,
+            augment_coords=False,  # No augmentation for evaluation
+            coord_noise_std=0.0,
+            global_bounds=global_bounds
         )
 
         # Create dataloader
