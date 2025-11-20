@@ -64,35 +64,68 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Results directory: {self.results_dir}")
         logger.info(f"Output directory: {self.output_dir}")
 
-    def load_anp_model(self, region: str) -> Optional[Tuple[GEDINeuralProcess, dict]]:
+    def load_anp_model(self, region: str) -> Optional[List[Tuple[GEDINeuralProcess, dict, str]]]:
+        """Load all ANP model seeds for a region.
+
+        Returns:
+            List of (model, config, seed_id) tuples, one per seed.
+        """
         region_dir = self.results_dir / region / 'anp'
 
         if not region_dir.exists():
             logger.warning(f"ANP directory not found for {region}: {region_dir}")
             return None
 
-        seed_dirs = list(region_dir.glob('seed_*'))
+        seed_dirs = sorted(list(region_dir.glob('seed_*')))
 
-        if seed_dirs:
-            model_dir = seed_dirs[0]
-            logger.info(f"Loading ANP model from seed directory: {model_dir}")
-        else:
+        if not seed_dirs:
+            # Fallback to loading from region_dir directly (no seed structure)
             model_dir = region_dir
+            checkpoint_path = model_dir / 'best_r2_model.pt'
+            config_path = model_dir / 'config.json'
 
-        checkpoint_path = model_dir / 'best_r2_model.pt'
-        config_path = model_dir / 'config.json'
+            if not checkpoint_path.exists() or not config_path.exists():
+                logger.warning(f"No seed directories and no model in {region_dir}")
+                return None
 
-        if not checkpoint_path.exists():
-            logger.warning(f"Checkpoint not found: {checkpoint_path}")
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            model = self._load_single_anp_model(checkpoint_path, config)
+            logger.info(f"Loaded ANP model for {region} from {checkpoint_path}")
+            return [(model, config, 'default')]
+
+        # Load all seeds
+        models = []
+        for model_dir in seed_dirs:
+            seed_id = model_dir.name
+            checkpoint_path = model_dir / 'best_r2_model.pt'
+            config_path = model_dir / 'config.json'
+
+            if not checkpoint_path.exists():
+                logger.warning(f"Checkpoint not found: {checkpoint_path}")
+                continue
+
+            if not config_path.exists():
+                logger.warning(f"Config not found: {config_path}")
+                continue
+
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            model = self._load_single_anp_model(checkpoint_path, config)
+            models.append((model, config, seed_id))
+            logger.info(f"Loaded ANP model for {region} from {seed_id}")
+
+        if not models:
+            logger.warning(f"No valid ANP models found for {region}")
             return None
 
-        if not config_path.exists():
-            logger.warning(f"Config not found: {config_path}")
-            return None
+        logger.info(f"Loaded {len(models)} ANP model seeds for {region}")
+        return models
 
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-
+    def _load_single_anp_model(self, checkpoint_path: Path, config: dict) -> GEDINeuralProcess:
+        """Helper to load a single ANP model from checkpoint."""
         model = GEDINeuralProcess(
             patch_size=config.get('patch_size', 3),
             embedding_channels=128,
@@ -105,48 +138,76 @@ class SpatialExtrapolationEvaluator:
             num_attention_heads=config.get('num_attention_heads', 4)
         )
 
-        checkpoint = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(self.device)
         model.eval()
 
-        logger.info(f"Loaded ANP model for {region} from {checkpoint_path}")
-        return model, config
+        return model
 
-    def load_xgboost_model(self, region: str) -> Optional[Tuple[XGBoostBaseline, dict]]:
+    def load_xgboost_model(self, region: str) -> Optional[List[Tuple[XGBoostBaseline, dict, str]]]:
+        """Load all XGBoost model seeds for a region.
+
+        Returns:
+            List of (model, config, seed_id) tuples, one per seed.
+        """
         region_dir = self.results_dir / region / 'baselines'
 
         if not region_dir.exists():
             logger.warning(f"Baselines directory not found for {region}: {region_dir}")
             return None
 
-        seed_dirs = list(region_dir.glob('seed_*'))
- 
-        if seed_dirs:
-            model_dir = seed_dirs[0]
-            logger.info(f"Loading XGBoost model from seed directory: {model_dir}")
-        else:
+        seed_dirs = sorted(list(region_dir.glob('seed_*')))
+
+        if not seed_dirs:
+            # Fallback to loading from region_dir directly (no seed structure)
             model_dir = region_dir
- 
-        model_path = model_dir / 'xgboost.pkl'
-        config_path = model_dir / 'config.json'
-        
-        if not model_path.exists():
-            logger.warning(f"XGBoost model not found: {model_path}")
+            model_path = model_dir / 'xgboost.pkl'
+            config_path = model_dir / 'config.json'
+
+            if not model_path.exists() or not config_path.exists():
+                logger.warning(f"No seed directories and no model in {region_dir}")
+                return None
+
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+
+            logger.info(f"Loaded XGBoost model for {region} from {model_path}")
+            return [(model, config, 'default')]
+
+        # Load all seeds
+        models = []
+        for model_dir in seed_dirs:
+            seed_id = model_dir.name
+            model_path = model_dir / 'xgboost.pkl'
+            config_path = model_dir / 'config.json'
+
+            if not model_path.exists():
+                logger.warning(f"XGBoost model not found: {model_path}")
+                continue
+
+            if not config_path.exists():
+                logger.warning(f"Config not found: {config_path}")
+                continue
+
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+
+            models.append((model, config, seed_id))
+            logger.info(f"Loaded XGBoost model for {region} from {seed_id}")
+
+        if not models:
+            logger.warning(f"No valid XGBoost models found for {region}")
             return None
 
-        if not config_path.exists():
-            logger.warning(f"Config not found: {config_path}")
-            return None
-
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-
-        with open(model_path, 'rb') as f:
-            model = pickle.load(f)
-
-        logger.info(f"Loaded XGBoost model for {region} from {model_path}")
-        return model, config
+        logger.info(f"Loaded {len(models)} XGBoost model seeds for {region}")
+        return models
 
     def load_test_data(self, region: str) -> Optional[DataLoader]:
         region_dir = self.results_dir / region / 'anp'
@@ -333,6 +394,10 @@ class SpatialExtrapolationEvaluator:
         return results
 
     def run_cross_evaluation(self, model_types: List[str] = ['anp', 'xgboost']) -> pd.DataFrame:
+        """Run cross-evaluation across all regions and seeds.
+
+        Evaluates each seed separately and computes aggregated statistics.
+        """
         results = []
 
         for model_type in model_types:
@@ -340,6 +405,7 @@ class SpatialExtrapolationEvaluator:
             logger.info(f"Evaluating {model_type.upper()} models")
             logger.info(f"{'='*60}\n")
 
+            # Load all models (list of seeds per region)
             models = {}
             for region in REGION_ORDER:
                 if model_type == 'anp':
@@ -351,21 +417,22 @@ class SpatialExtrapolationEvaluator:
                     continue
 
                 if model_data is not None:
-                    models[region] = model_data
+                    models[region] = model_data  # List of (model, config, seed_id) tuples
 
+            # Load test data
             test_loaders = {}
             for region in REGION_ORDER:
                 loader = self.load_test_data(region)
                 if loader is not None:
                     test_loaders[region] = loader
 
-            # train_region x test_region
+            # Evaluate: train_region x test_region x seed
             for train_region in REGION_ORDER:
                 if train_region not in models:
                     logger.warning(f"Skipping {train_region} (model not found)")
                     continue
 
-                model, config = models[train_region]
+                model_seeds = models[train_region]  # List of (model, config, seed_id)
 
                 for test_region in REGION_ORDER:
                     if test_region not in test_loaders:
@@ -374,24 +441,71 @@ class SpatialExtrapolationEvaluator:
 
                     test_loader = test_loaders[test_region]
 
-                    if model_type == 'anp':
-                        result = self.evaluate_anp_on_region(
-                            model, test_loader, train_region, test_region
-                        )
-                    elif model_type == 'xgboost':
-                        result = self.evaluate_xgboost_on_region(
-                            model, test_loader, train_region, test_region
-                        )
+                    # Evaluate each seed
+                    seed_results = []
+                    for model, config, seed_id in model_seeds:
+                        if model_type == 'anp':
+                            result = self.evaluate_anp_on_region(
+                                model, test_loader, train_region, test_region
+                            )
+                        elif model_type == 'xgboost':
+                            result = self.evaluate_xgboost_on_region(
+                                model, test_loader, train_region, test_region
+                            )
 
-                    results.append(result)
+                        result['seed_id'] = seed_id
+                        seed_results.append(result)
+                        results.append(result)
+
+                    # Compute aggregated statistics across seeds
+                    if len(seed_results) > 1:
+                        aggregated = self._aggregate_seed_results(
+                            seed_results, train_region, test_region, model_type
+                        )
+                        results.append(aggregated)
 
         df = pd.DataFrame(results)
 
+        # Save all results (individual seeds + aggregated)
         output_path = self.output_dir / 'spatial_extrapolation_results.csv'
         df.to_csv(output_path, index=False)
         logger.info(f"Saved results to {output_path}")
 
         return df
+
+    def _aggregate_seed_results(
+        self,
+        seed_results: List[dict],
+        train_region: str,
+        test_region: str,
+        model_type: str
+    ) -> dict:
+        """Aggregate results across seeds for a given train-test region pair."""
+        metric_keys = ['log_rmse', 'log_mae', 'log_r2', 'mean_uncertainty',
+                       'coverage_1sigma', 'coverage_2sigma', 'coverage_3sigma']
+
+        aggregated = {
+            'train_region': train_region,
+            'test_region': test_region,
+            'model_type': model_type,
+            'seed_id': 'mean',
+            'num_seeds': len(seed_results)
+        }
+
+        # Compute mean and std for each metric
+        for key in metric_keys:
+            values = [r[key] for r in seed_results if key in r and r[key] is not None]
+            if values:
+                aggregated[key] = np.mean(values)
+                aggregated[f'{key}_std'] = np.std(values)
+            else:
+                aggregated[key] = None
+                aggregated[f'{key}_std'] = None
+
+        # Average num_predictions
+        aggregated['num_predictions'] = np.mean([r['num_predictions'] for r in seed_results])
+
+        return aggregated
 
     def create_heatmap(
         self,
@@ -403,11 +517,25 @@ class SpatialExtrapolationEvaluator:
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
         reverse_cmap: bool = False,
-        ax: Optional[plt.Axes] = None
+        ax: Optional[plt.Axes] = None,
+        show_std: bool = True
     ) -> plt.Axes:
-        df_model = df[df['model_type'] == model_type]
+        """Create heatmap using aggregated (mean) results across seeds.
 
-        matrix = df_model.pivot(
+        Args:
+            show_std: If True and std data is available, annotate cells with mean ± std
+        """
+        # Filter for aggregated results (seed_id == 'mean')
+        df_model = df[df['model_type'] == model_type]
+        if 'seed_id' in df_model.columns:
+            df_mean = df_model[df_model['seed_id'] == 'mean']
+            if len(df_mean) == 0:
+                # No aggregated results, use all data (backward compatibility)
+                df_mean = df_model
+        else:
+            df_mean = df_model
+
+        matrix = df_mean.pivot(
             index='train_region',
             columns='test_region',
             values=metric
@@ -421,22 +549,59 @@ class SpatialExtrapolationEvaluator:
         if ax is None:
             fig, ax = plt.subplots(figsize=(8, 7))
 
-        sns.heatmap(
-            matrix,
-            annot=True,
-            fmt='.3f',
-            cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
-            cbar_kws={'label': metric_name},
-            ax=ax,
-            linewidths=0.5,
-            linecolor='gray'
-        )
+        # Create annotations with std if available
+        annot_matrix = matrix.copy()
+        std_col = f'{metric}_std'
+        if show_std and std_col in df_mean.columns:
+            std_matrix = df_mean.pivot(
+                index='train_region',
+                columns='test_region',
+                values=std_col
+            ).reindex(index=REGION_ORDER, columns=REGION_ORDER)
+
+            # Format: mean ± std
+            annot_matrix = matrix.copy()
+            for i, train_reg in enumerate(REGION_ORDER):
+                for j, test_reg in enumerate(REGION_ORDER):
+                    mean_val = matrix.loc[train_reg, test_reg]
+                    std_val = std_matrix.loc[train_reg, test_reg]
+                    if pd.notna(mean_val) and pd.notna(std_val):
+                        annot_matrix.loc[train_reg, test_reg] = f'{mean_val:.3f}\n±{std_val:.3f}'
+                    elif pd.notna(mean_val):
+                        annot_matrix.loc[train_reg, test_reg] = f'{mean_val:.3f}'
+
+            sns.heatmap(
+                matrix,
+                annot=annot_matrix,
+                fmt='',
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+                cbar_kws={'label': metric_name},
+                ax=ax,
+                linewidths=0.5,
+                linecolor='gray'
+            )
+        else:
+            sns.heatmap(
+                matrix,
+                annot=True,
+                fmt='.3f',
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+                cbar_kws={'label': metric_name},
+                ax=ax,
+                linewidths=0.5,
+                linecolor='gray'
+            )
 
         ax.set_xlabel('Test Region', fontsize=12)
         ax.set_ylabel('Train Region', fontsize=12)
-        ax.set_title(f'{model_type.upper()}: {metric_name}', fontsize=14, fontweight='bold')
+        title = f'{model_type.upper()}: {metric_name}'
+        if show_std and std_col in df_mean.columns:
+            title += ' (Mean ± Std across seeds)'
+        ax.set_title(title, fontsize=14, fontweight='bold')
         ax.set_xticklabels([REGIONS[r] for r in REGION_ORDER], rotation=45, ha='right')
         ax.set_yticklabels([REGIONS[r] for r in REGION_ORDER], rotation=0)
 
@@ -452,9 +617,16 @@ class SpatialExtrapolationEvaluator:
     ) -> plt.Figure:
         fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
-        # shared vmin/vmax
-        vmin = df[metric].min()
-        vmax = df[metric].max()
+        # Filter for mean results to compute shared vmin/vmax
+        if 'seed_id' in df.columns:
+            df_mean = df[df['seed_id'] == 'mean']
+            if len(df_mean) == 0:
+                df_mean = df
+        else:
+            df_mean = df
+
+        vmin = df_mean[metric].min()
+        vmax = df_mean[metric].max()
 
         # ANP heatmap
         self.create_heatmap(
@@ -517,14 +689,23 @@ class SpatialExtrapolationEvaluator:
     def create_summary_table(self, df: pd.DataFrame):
         logger.info("\nCreating summary statistics...")
 
-        df['is_diagonal'] = df['train_region'] == df['test_region']
-        df['split'] = df['is_diagonal'].map({True: 'In-Distribution', False: 'Out-of-Distribution'})
+        # Filter for aggregated (mean) results
+        if 'seed_id' in df.columns:
+            df_mean = df[df['seed_id'] == 'mean'].copy()
+            if len(df_mean) == 0:
+                df_mean = df.copy()
+        else:
+            df_mean = df.copy()
 
-        summary = df.groupby(['model_type', 'split']).agg({
-            'log_r2': ['mean', 'std'],
-            'log_rmse': ['mean', 'std'],
-            'coverage_1sigma': ['mean', 'std'],
-            'mean_uncertainty': ['mean', 'std']
+        df_mean['is_diagonal'] = df_mean['train_region'] == df_mean['test_region']
+        df_mean['split'] = df_mean['is_diagonal'].map({True: 'In-Distribution', False: 'Out-of-Distribution'})
+
+        # For mean results, we already have std columns, so just report means
+        summary = df_mean.groupby(['model_type', 'split']).agg({
+            'log_r2': ['mean'],
+            'log_rmse': ['mean'],
+            'coverage_1sigma': ['mean'],
+            'mean_uncertainty': ['mean']
         }).round(3)
 
         output_path = self.output_dir / 'extrapolation_summary.csv'
@@ -532,12 +713,26 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Saved summary to {output_path}")
 
         print("\n" + "="*80)
-        print("SPATIAL EXTRAPOLATION SUMMARY")
+        print("SPATIAL EXTRAPOLATION SUMMARY (Aggregated across seeds)")
         print("="*80)
         print(summary)
         print("="*80)
 
-        self.compute_degradation_metrics(df)
+        # Also print seed-level variability if available
+        if 'log_r2_std' in df_mean.columns:
+            print("\nSeed-level variability (mean std across train-test pairs):")
+            for model_type in df_mean['model_type'].unique():
+                df_model = df_mean[df_mean['model_type'] == model_type]
+                for split in ['In-Distribution', 'Out-of-Distribution']:
+                    df_split = df_model[df_model['split'] == split]
+                    r2_std = df_split['log_r2_std'].mean()
+                    rmse_std = df_split['log_rmse_std'].mean()
+                    print(f"  {model_type} - {split}:")
+                    print(f"    R² std: {r2_std:.4f}")
+                    print(f"    RMSE std: {rmse_std:.4f}")
+            print("="*80)
+
+        self.compute_degradation_metrics(df_mean)
 
     def compute_degradation_metrics(self, df: pd.DataFrame):
         logger.info("\nComputing degradation metrics...")
