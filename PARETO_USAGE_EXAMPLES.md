@@ -2,6 +2,29 @@
 
 Based on your actual data showing z_std ranges from 0.7 to 188, here are the recommended visualizations:
 
+## Quick Start (With ANP Comparison)
+
+### 0. Compare ANP with Baselines (Recommended!)
+
+```bash
+python plot_pareto_frontier.py \
+    --input outputs_pareto/pareto_results.csv \
+    --anp_input outputs_anp/statistics.csv \
+    --output figures/pareto_vs_anp.png \
+    --show_pareto \
+    --encode_time size
+```
+
+**What you'll see:**
+- RF and XGB sweep results in separate panels
+- ANP overlaid as **red diamond** on both panels (for direct comparison)
+- Point size shows training time for baselines
+- Instantly see if ANP beats the baselines on calibration!
+
+**Key insight:** Does ANP sit on the Pareto frontier? Or is there a baseline config that beats it on both accuracy and calibration?
+
+---
+
 ## Quick Start (Recommended)
 
 ### 1. Basic Calibration Plot with Auto Log Scale
@@ -148,6 +171,76 @@ python plot_pareto_frontier.py \
 - You want direct RF vs XGB comparison
 - Creating slides/presentations
 - Space-constrained publications
+
+**With ANP:**
+```bash
+python plot_pareto_frontier.py \
+    --input outputs_pareto/pareto_results.csv \
+    --anp_input outputs_anp/statistics.csv \
+    --output figures/pareto_all_models.png \
+    --combined \
+    --show_pareto
+```
+
+This puts RF, XGB, and ANP all on one plot - great for talks!
+
+---
+
+## ANP Comparison Options
+
+### Understanding ANP Results
+
+The `--anp_input` flag loads results from `run_training_harness.py`:
+
+```bash
+# First, run ANP training with multiple seeds
+python run_training_harness.py \
+    --script train.py \
+    --n_seeds 10 \
+    --output_dir ./outputs_anp \
+    ... other args ...
+
+# This creates outputs_anp/statistics.csv with aggregated metrics
+```
+
+The statistics.csv contains:
+- `test_log_rmse_mean` → converted to `log_rmse_mean`
+- `test_z_std_mean` → converted to `z_std_mean`
+- etc.
+
+### ANP Visualization Features
+
+**Red diamond marker:**
+- ANP is plotted with a distinctive diamond shape
+- Larger than baseline points
+- Black edge for visibility
+- Always on top (z-order)
+
+**Overlay behavior:**
+- **Separate panels** (default): ANP appears on BOTH RF and XGB panels
+  - Allows direct comparison with each baseline family
+- **Combined panel** (`--combined`): ANP appears once with all models
+
+**No Pareto frontier for ANP:**
+- ANP typically has one result (or a few seeds averaged)
+- No hyperparameter sweep → no frontier to draw
+- Just a reference point for comparison
+
+### Example: Which baseline config beats ANP?
+
+```bash
+python plot_pareto_frontier.py \
+    --input outputs_pareto/pareto_results.csv \
+    --anp_input outputs_anp/statistics.csv \
+    --output figures/baseline_vs_anp.png \
+    --show_pareto \
+    --encode_time size
+```
+
+**Then look for:**
+1. Any baseline points **below-left** of ANP = better on both metrics
+2. Points on the frontier **left** of ANP = better accuracy, comparable calibration
+3. ANP diamond **on or below** the frontier = ANP is Pareto-optimal!
 
 ---
 

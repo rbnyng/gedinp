@@ -21,6 +21,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Plot Pareto frontier for baseline sweep results')
     parser.add_argument('--input', type=str, default='outputs_pareto/pareto_results.csv',
                         help='Path to pareto_results.csv')
+    parser.add_argument('--anp_input', type=str, default=None,
+                        help='Path to ANP statistics.csv from run_training_harness.py (optional)')
     parser.add_argument('--output', type=str, default='pareto_frontier.png',
                         help='Output plot filename')
     parser.add_argument('--y_metric', type=str, default='z_std',
@@ -41,6 +43,73 @@ def parse_args():
     parser.add_argument('--dpi', type=int, default=300,
                         help='Output DPI (default: 300)')
     return parser.parse_args()
+
+
+def load_anp_results(anp_csv_path):
+    """
+    Load ANP results from run_training_harness.py statistics.csv and convert to baseline format.
+
+    The statistics.csv has columns like:
+    - test_log_rmse_mean, test_log_rmse_std
+    - test_z_std_mean, test_z_std_std
+    - test_coverage_1sigma_mean, etc.
+
+    We need to convert to match baseline sweep format:
+    - log_rmse_mean, log_rmse_std
+    - z_std_mean, z_std_std
+    - etc.
+    """
+    anp_df = pd.read_csv(anp_csv_path)
+
+    # Map test_ prefixed columns to non-prefixed columns
+    column_mapping = {}
+    for col in anp_df.columns:
+        if col.startswith('test_'):
+            new_col = col.replace('test_', '')
+            column_mapping[col] = new_col
+
+    # Rename columns
+    anp_df = anp_df.rename(columns=column_mapping)
+
+    # Add model_type column
+    anp_df['model_type'] = 'anp'
+
+    # Add dummy config columns (ANP doesn't have hyperparameter sweep)
+    anp_df['config_max_depth'] = np.nan
+    anp_df['config_n_estimators'] = np.nan
+    anp_df['config_learning_rate'] = np.nan
+
+    # Check if train_time is available, if not use NaN
+    if 'train_time_mean' not in anp_df.columns:
+        anp_df['train_time_mean'] = np.nan
+        anp_df['train_time_std'] = np.nan
+
+    # Compute calibration_error if not present
+    if 'calibration_error_mean' not in anp_df.columns and 'z_std_mean' in anp_df.columns:
+        anp_df['calibration_error_mean'] = np.abs(anp_df['z_std_mean'] - 1.0)
+        if 'z_std_std' in anp_df.columns:
+            anp_df['calibration_error_std'] = anp_df['z_std_std']
+
+    # Select only columns that match baseline format
+    baseline_cols = [
+        'model_type', 'config_max_depth', 'config_n_estimators', 'config_learning_rate',
+        'train_time_mean', 'train_time_std',
+        'log_rmse_mean', 'log_rmse_std',
+        'log_mae_mean', 'log_mae_std',
+        'log_r2_mean', 'log_r2_std',
+        'z_mean_mean', 'z_mean_std',
+        'z_std_mean', 'z_std_std',
+        'calibration_error_mean', 'calibration_error_std',
+        'coverage_1sigma_mean', 'coverage_1sigma_std',
+        'coverage_2sigma_mean', 'coverage_2sigma_std',
+        'coverage_3sigma_mean', 'coverage_3sigma_std',
+    ]
+
+    # Keep only columns that exist in both formats
+    existing_cols = [col for col in baseline_cols if col in anp_df.columns]
+    anp_df = anp_df[existing_cols]
+
+    return anp_df
 
 
 def compute_pareto_frontier(df, x_col, y_col, minimize_both=True):
@@ -131,6 +200,7 @@ def plot_pareto_frontier(df, args):
 
     # Check which models are present
     models_present = df['model_type'].unique()
+    has_anp = 'anp' in models_present
 
     # Determine whether we need calibration error minimization or z_std/coverage optimization
     minimize_both = args.y_metric in ['calibration_error']
@@ -142,12 +212,17 @@ def plot_pareto_frontier(df, args):
         model_groups = [models_present]
         titles = ['All Models']
     else:
-        # Separate panels for RF and XGB
-        n_panels = len([m for m in ['rf', 'xgb'] if m in models_present])
+        # Separate panels for RF and XGB (ANP will be overlaid on both)
+        baseline_models = [m for m in ['rf', 'xgb'] if m in models_present]
+        n_panels = len(baseline_models)
+        if n_panels == 0:
+            n_panels = 1
+            baseline_models = ['anp'] if has_anp else []
         fig, axes = plt.subplots(1, n_panels, figsize=(6*n_panels, 5), squeeze=False)
         axes = axes.flatten()
-        model_groups = [[m] for m in ['rf', 'xgb'] if m in models_present]
-        titles = [model_labels.get(m, m) for m in ['rf', 'xgb'] if m in models_present]
+        # For separate panels, show baseline model + ANP overlay on each
+        model_groups = [[m, 'anp'] if has_anp and m != 'anp' else [m] for m in baseline_models]
+        titles = [model_labels.get(m, m) for m in baseline_models]
 
     # Plot each panel
     for ax, models, title in zip(axes, model_groups, titles):
@@ -157,9 +232,16 @@ def plot_pareto_frontier(df, args):
             if len(model_df) == 0:
                 continue
 
+            # ANP gets special marker and doesn't encode training time
+            is_anp = (model == 'anp')
+            marker = 'D' if is_anp else 'o'  # Diamond for ANP, circle for baselines
+            base_size = 150 if is_anp else 50  # Larger for ANP to stand out
+
             # Setup point sizes and colors based on training time encoding
-            base_size = 50
-            if args.encode_time in ['size', 'both']:
+            # Skip time encoding for ANP if it doesn't have training time data
+            has_train_time = not model_df['train_time_mean'].isna().all()
+
+            if args.encode_time in ['size', 'both'] and has_train_time and not is_anp:
                 # Scale point size by training time (log scale for better visibility)
                 time_norm = np.log10(model_df['train_time_mean'] + 1)
                 time_norm = (time_norm - time_norm.min()) / (time_norm.max() - time_norm.min() + 1e-8)
@@ -167,7 +249,7 @@ def plot_pareto_frontier(df, args):
             else:
                 sizes = base_size
 
-            if args.encode_time in ['color', 'both']:
+            if args.encode_time in ['color', 'both'] and has_train_time and not is_anp:
                 # Use colormap for training time
                 import matplotlib.cm as cm
                 time_values = model_df['train_time_mean']
@@ -183,15 +265,17 @@ def plot_pareto_frontier(df, args):
                 model_df[x_col],
                 model_df[y_col],
                 c=colors,
+                marker=marker,
                 label=model_labels.get(model, model),
-                alpha=0.6,
+                alpha=0.7 if is_anp else 0.6,
                 s=sizes,
-                edgecolors='white',
-                linewidths=0.5
+                edgecolors='black' if is_anp else 'white',
+                linewidths=1.5 if is_anp else 0.5,
+                zorder=10 if is_anp else 5  # ANP on top
             )
 
-            # Plot Pareto frontier
-            if args.show_pareto:
+            # Plot Pareto frontier (skip for ANP since it's usually a single point)
+            if args.show_pareto and not is_anp and len(model_df) > 1:
                 pareto_df = compute_pareto_frontier(
                     model_df,
                     x_col,
@@ -349,18 +433,28 @@ def print_summary_statistics(df):
 
     for model in df['model_type'].unique():
         model_df = df[df['model_type'] == model]
-        print(f"\n{model.upper()} (n={len(model_df)} configs):")
+        is_anp = (model == 'anp')
+
+        print(f"\n{model.upper()} (n={len(model_df)} {'result' if is_anp else 'configs'}):")
         print(f"  Log RMSE:          {model_df['log_rmse_mean'].min():.4f} - {model_df['log_rmse_mean'].max():.4f}")
         print(f"  Z-Score Std:       {model_df['z_std_mean'].min():.4f} - {model_df['z_std_mean'].max():.4f}")
-        print(f"  Calibration Error: {model_df['calibration_error_mean'].min():.4f} - {model_df['calibration_error_mean'].max():.4f}")
-        print(f"  Coverage 1-sigma:  {model_df['coverage_1sigma_mean'].min():.1f}% - {model_df['coverage_1sigma_mean'].max():.1f}%")
-        print(f"  Train Time (s):    {model_df['train_time_mean'].min():.2f} - {model_df['train_time_mean'].max():.2f}")
+        if 'calibration_error_mean' in model_df.columns:
+            print(f"  Calibration Error: {model_df['calibration_error_mean'].min():.4f} - {model_df['calibration_error_mean'].max():.4f}")
+        if 'coverage_1sigma_mean' in model_df.columns:
+            print(f"  Coverage 1-sigma:  {model_df['coverage_1sigma_mean'].min():.1f}% - {model_df['coverage_1sigma_mean'].max():.1f}%")
+        if not model_df['train_time_mean'].isna().all():
+            print(f"  Train Time (s):    {model_df['train_time_mean'].min():.2f} - {model_df['train_time_mean'].max():.2f}")
+
+        # Skip best config search for ANP (single point) or if insufficient data
+        if is_anp or len(model_df) <= 1:
+            continue
 
         # Best calibration (z_std closest to 1.0)
         best_calib_idx = (model_df['z_std_mean'] - 1.0).abs().idxmin()
         best_calib = model_df.loc[best_calib_idx]
         print(f"\n  Best Calibration Config:")
-        print(f"    max_depth={best_calib['config_max_depth']}, n_estimators={best_calib['config_n_estimators']}")
+        if not pd.isna(best_calib['config_max_depth']):
+            print(f"    max_depth={int(best_calib['config_max_depth'])}, n_estimators={int(best_calib['config_n_estimators'])}")
         print(f"    Log RMSE: {best_calib['log_rmse_mean']:.4f}")
         print(f"    Z-Score Std: {best_calib['z_std_mean']:.4f}")
 
@@ -368,7 +462,8 @@ def print_summary_statistics(df):
         best_acc_idx = model_df['log_rmse_mean'].idxmin()
         best_acc = model_df.loc[best_acc_idx]
         print(f"\n  Best Accuracy Config:")
-        print(f"    max_depth={best_acc['config_max_depth']}, n_estimators={best_acc['config_n_estimators']}")
+        if not pd.isna(best_acc['config_max_depth']):
+            print(f"    max_depth={int(best_acc['config_max_depth'])}, n_estimators={int(best_acc['config_n_estimators'])}")
         print(f"    Log RMSE: {best_acc['log_rmse_mean']:.4f}")
         print(f"    Z-Score Std: {best_acc['z_std_mean']:.4f}")
 
@@ -389,7 +484,23 @@ def main():
     print(f"Loading results from: {input_path}")
     df = pd.read_csv(input_path)
 
-    print(f"Loaded {len(df)} configurations")
+    print(f"Loaded {len(df)} baseline configurations")
+
+    # Load ANP results if provided
+    if args.anp_input:
+        anp_path = Path(args.anp_input)
+        if not anp_path.exists():
+            print(f"Warning: ANP input file not found: {anp_path}")
+            print("Continuing with baselines only...")
+        else:
+            print(f"Loading ANP results from: {anp_path}")
+            anp_df = load_anp_results(anp_path)
+            print(f"Loaded {len(anp_df)} ANP results")
+
+            # Combine baseline and ANP results
+            df = pd.concat([df, anp_df], ignore_index=True)
+            print(f"Combined total: {len(df)} configurations")
+
     print(f"Models: {', '.join(df['model_type'].unique())}")
 
     # Print summary statistics
