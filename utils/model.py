@@ -34,7 +34,11 @@ def initialize_model(
         latent_dim=config.get('latent_dim', 128),
         output_uncertainty=True,
         architecture_mode=config.get('architecture_mode', 'deterministic'),
-        num_attention_heads=config.get('num_attention_heads', 4)
+        num_attention_heads=config.get('num_attention_heads', 4),
+        basis_function_type=config.get('basis_function_type', 'none'),
+        basis_num_frequencies=config.get('basis_num_frequencies', 32),
+        basis_frequency_scale=config.get('basis_frequency_scale', 1.0),
+        basis_learnable=config.get('basis_learnable', False)
     ).to(device)
 
     return model
