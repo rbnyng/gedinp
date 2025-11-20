@@ -193,6 +193,21 @@ class SpatialExtrapolationEvaluator:
         # Load parquet
         df = pd.read_parquet(test_split_path)
 
+        # Reshape flattened embeddings back to (H, W, C) format
+        # Embeddings were flattened before saving to parquet
+        # Default: 3x3 patches with 128 channels = 1152 elements
+        patch_size = 3
+        embedding_channels = 128
+
+        def reshape_embedding(flat_list):
+            """Reshape flattened embedding back to (H, W, C)."""
+            if flat_list is None:
+                return None
+            arr = np.array(flat_list)
+            return arr.reshape(patch_size, patch_size, embedding_channels)
+
+        df['embedding_patch'] = df['embedding_patch'].apply(reshape_embedding)
+
         # Load config to get global bounds
         global_bounds = None
         if config_path.exists():
