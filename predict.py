@@ -57,15 +57,8 @@ def parse_args():
 
 
 def detect_model_type(checkpoint_dir: Path) -> str:
-    """
-    Detect whether the checkpoint is a Neural Process or baseline model.
-
-    Returns:
-        'neural_process', 'xgboost', 'random_forest', 'mlp', or 'idw'
-    """
     checkpoint_dir = Path(checkpoint_dir)
 
-    # Check for baseline model pickle files
     if (checkpoint_dir / 'xgboost.pkl').exists():
         return 'xgboost'
     elif (checkpoint_dir / 'random_forest.pkl').exists():
@@ -74,7 +67,6 @@ def detect_model_type(checkpoint_dir: Path) -> str:
         return 'mlp'
     elif (checkpoint_dir / 'idw.pkl').exists():
         return 'idw'
-    # Check for Neural Process checkpoint files
     elif (checkpoint_dir / 'best_r2_model.pt').exists() or (checkpoint_dir / 'best_model.pt').exists():
         return 'neural_process'
     else:
@@ -85,20 +77,9 @@ def detect_model_type(checkpoint_dir: Path) -> str:
 
 
 def load_baseline_model(checkpoint_dir: Path, model_type: str) -> Tuple[object, dict]:
-    """
-    Load a baseline model from pickle file.
-
-    Args:
-        checkpoint_dir: Directory containing the model pickle file
-        model_type: Type of baseline model ('xgboost', 'random_forest', 'mlp', 'idw')
-
-    Returns:
-        Tuple of (model, config)
-    """
     print(f"Loading {model_type.upper()} baseline model...")
     config = load_config(checkpoint_dir / 'config.json')
 
-    # Map model type to pickle filename
     model_files = {
         'xgboost': 'xgboost.pkl',
         'random_forest': 'random_forest.pkl',
@@ -117,12 +98,6 @@ def load_baseline_model(checkpoint_dir: Path, model_type: str) -> Tuple[object, 
 
 
 def load_model_and_config(checkpoint_dir: Path, device: str):
-    """
-    Load model and config, automatically detecting model type.
-
-    Returns:
-        Tuple of (model, config, model_type)
-    """
     checkpoint_dir = Path(checkpoint_dir)
     model_type = detect_model_type(checkpoint_dir)
 
@@ -134,7 +109,6 @@ def load_model_and_config(checkpoint_dir: Path, device: str):
 
         print(f"Architecture mode: {config.get('architecture_mode', 'deterministic')}")
 
-        # Initialize and load model using utility function
         print("Initializing model...")
         model, checkpoint, checkpoint_path = load_model_from_checkpoint(
             checkpoint_dir, device
@@ -148,7 +122,6 @@ def load_model_and_config(checkpoint_dir: Path, device: str):
 
         return model, config, model_type
     else:
-        # Load baseline model
         model, config = load_baseline_model(checkpoint_dir, model_type)
         return model, config, model_type
 
@@ -187,20 +160,20 @@ def query_context_gedi(
 
     print(f"Found {len(gedi_df)} GEDI shots in buffered region")
 
-    # Select N nearest to region center
+    # select N nearest to region center
     center_lon = (min_lon + max_lon) / 2
     center_lat = (min_lat + max_lat) / 2
 
-    # Compute distances to center
+    # compute distances to center
     gedi_coords = gedi_df[['longitude', 'latitude']].values
     center = np.array([[center_lon, center_lat]])
 
-    # Simple euclidean distance (good enough for small regions)
+    # simple euclidean distance (good enough for small regions)
     distances = np.sqrt(
         ((gedi_coords - center) ** 2).sum(axis=1)
     )
 
-    # Sort by distance and take top N
+    # sort by distance and take top N
     nearest_indices = np.argsort(distances)[:n_context]
     context_df = gedi_df.iloc[nearest_indices].copy()
 
@@ -216,12 +189,12 @@ def generate_prediction_grid(
 ) -> tuple:
     min_lon, min_lat, max_lon, max_lat = region_bbox
 
-    # Convert resolution to degrees (approximate)
+    # resolution to degrees (approximate)
     # At equator: 1 degree ≈ 111km
     meters_per_degree = 111000.0
     resolution_deg = resolution_m / meters_per_degree
 
-    # Adjust for latitude (longitude spacing varies with latitude)
+    # adj for latitude (longitude spacing varies with latitude)
     center_lat = (min_lat + max_lat) / 2
     lon_resolution_deg = resolution_deg / np.cos(np.radians(center_lat))
     lat_resolution_deg = resolution_deg
@@ -273,7 +246,6 @@ def run_inference_neural_process(
     batch_size: int,
     device: str
 ) -> tuple:
-    """Run inference with Neural Process model (requires context)."""
     print(f"\nRunning Neural Process inference on {len(query_df)} query points...")
     print(f"Using {len(context_df)} context shots")
     print(f"Batch size: {batch_size}")
@@ -343,37 +315,28 @@ def run_inference_baseline(
     config: dict,
     global_bounds: tuple
 ) -> tuple:
-    """Run inference with baseline model (no context needed)."""
     print(f"\nRunning baseline inference on {len(query_df)} query points...")
 
     query_coords = query_df[['longitude', 'latitude']].values
     query_coords_norm = normalize_coords(query_coords, global_bounds)
     query_embeddings = np.stack(query_df['embedding_patch'].values)
 
-    # Baseline models predict directly on coords and embeddings
     predictions_norm, uncertainties_norm = model.predict(
         query_coords_norm,
         query_embeddings,
         return_std=True
     )
 
-    # Get normalization parameters from config
     agbd_scale = config.get('agbd_scale', 200.0)
     log_transform = config.get('log_transform_agbd', True)
 
-    # Denormalize predictions to linear space
     predictions = denormalize_agbd(
         predictions_norm,
         agbd_scale=agbd_scale,
         log_transform=log_transform
     )
 
-    # Denormalize uncertainties
-    # For baselines, uncertainties are in normalized log space
-    # We need to transform them to linear space
     if log_transform:
-        # For log-transformed predictions:
-        # std_linear ≈ exp(pred_norm + agbd_scale) * std_norm
         predictions_linear_scale = np.exp(predictions_norm) * agbd_scale
         uncertainties = predictions_linear_scale * uncertainties_norm
     else:
@@ -452,12 +415,6 @@ def create_visualization(
     output_path: Path,
     region_bbox: tuple
 ):
-    """
-    Create visualization of predictions and uncertainties.
-
-    Note: context_df is currently not used in the visualization but kept
-    for API compatibility. Could be extended to overlay context points.
-    """
     print("\nGenerating visualization...")
 
     n_rows = len(lats)
@@ -537,7 +494,7 @@ def main():
     print(f"  Lon: [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}]")
     print(f"  Lat: [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
 
-    # Only query context GEDI data for Neural Process models
+    # only query context GEDI data for Neural Process models
     context_df = None
     if model_type == 'neural_process':
         print(f"Context shots: {args.n_context}")
@@ -558,7 +515,7 @@ def main():
         embeddings_dir=args.embeddings_dir
     )
 
-    # Extract embeddings for context (Neural Process only)
+    # embeddings for context (NP only)
     if context_df is not None:
         context_df = extract_embeddings(
             context_df,
@@ -594,7 +551,6 @@ def main():
     print(f"\nWill predict for {len(query_df):,} valid points "
           f"({100*len(query_df)/(n_rows*n_cols):.1f}% of grid)")
 
-    # Run appropriate inference based on model type
     if model_type == 'neural_process':
         predictions, uncertainties = run_inference_neural_process(
             model,
@@ -642,7 +598,6 @@ def main():
         "AGB Uncertainty (Mg/ha)"
     )
 
-    # Save context geojson only for Neural Process models
     if context_df is not None:
         save_context_geojson(
             context_df,

@@ -44,8 +44,6 @@ REGION_ORDER = ['maine', 'tolima', 'hokkaido', 'sudtirol']
 
 
 class SpatialExtrapolationEvaluator:
-    """Evaluate models trained on one region against test sets from all regions."""
-
     def __init__(
         self,
         results_dir: Path,
@@ -67,19 +65,15 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Output directory: {self.output_dir}")
 
     def load_anp_model(self, region: str) -> Optional[Tuple[GEDINeuralProcess, dict]]:
-        """Load ANP model for a region."""
-        # Try to find best model across seeds
         region_dir = self.results_dir / region / 'anp'
 
         if not region_dir.exists():
             logger.warning(f"ANP directory not found for {region}: {region_dir}")
             return None
 
-        # Look for seed directories or direct checkpoint
         seed_dirs = list(region_dir.glob('seed_*'))
 
         if seed_dirs:
-            # Use first seed (or best seed if we track that)
             model_dir = seed_dirs[0]
             logger.info(f"Loading ANP model from seed directory: {model_dir}")
         else:
@@ -96,11 +90,9 @@ class SpatialExtrapolationEvaluator:
             logger.warning(f"Config not found: {config_path}")
             return None
 
-        # Load config
         with open(config_path, 'r') as f:
             config = json.load(f)
 
-        # Initialize model
         model = GEDINeuralProcess(
             patch_size=config.get('patch_size', 3),
             embedding_channels=128,
@@ -113,7 +105,6 @@ class SpatialExtrapolationEvaluator:
             num_attention_heads=config.get('num_attention_heads', 4)
         )
 
-        # Load weights
         checkpoint = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(self.device)
@@ -123,18 +114,15 @@ class SpatialExtrapolationEvaluator:
         return model, config
 
     def load_xgboost_model(self, region: str) -> Optional[Tuple[XGBoostBaseline, dict]]:
-        """Load XGBoost model for a region."""
         region_dir = self.results_dir / region / 'baselines'
 
         if not region_dir.exists():
             logger.warning(f"Baselines directory not found for {region}: {region_dir}")
             return None
 
-        # Look for seed directories or direct model file
         seed_dirs = list(region_dir.glob('seed_*'))
  
         if seed_dirs:
-            # Use first seed (or best seed if we track that)
             model_dir = seed_dirs[0]
             logger.info(f"Loading XGBoost model from seed directory: {model_dir}")
         else:
@@ -151,11 +139,9 @@ class SpatialExtrapolationEvaluator:
             logger.warning(f"Config not found: {config_path}")
             return None
 
-        # Load config
         with open(config_path, 'r') as f:
             config = json.load(f)
 
-        # Load model
         with open(model_path, 'rb') as f:
             model = pickle.load(f)
 
@@ -163,15 +149,12 @@ class SpatialExtrapolationEvaluator:
         return model, config
 
     def load_test_data(self, region: str) -> Optional[DataLoader]:
-        """Load test dataset for a region."""
-        # Try to find test split in region directory
         region_dir = self.results_dir / region / 'anp'
 
         if not region_dir.exists():
             logger.warning(f"Region directory not found: {region_dir}")
             return None
 
-        # Check seed directories first
         seed_dirs = list(region_dir.glob('seed_*'))
         if seed_dirs:
             test_split_path = seed_dirs[0] / 'test_split.parquet'
@@ -184,17 +167,12 @@ class SpatialExtrapolationEvaluator:
             logger.warning(f"Test split not found: {test_split_path}")
             return None
 
-        # Load parquet
         df = pd.read_parquet(test_split_path)
 
-        # Reshape flattened embeddings back to (H, W, C) format
-        # Embeddings were flattened before saving to parquet
-        # Default: 3x3 patches with 128 channels = 1152 elements
         patch_size = 3
         embedding_channels = 128
 
         def reshape_embedding(flat_list):
-            """Reshape flattened embedding back to (H, W, C)."""
             if flat_list is None:
                 return None
             arr = np.array(flat_list)
@@ -202,26 +180,22 @@ class SpatialExtrapolationEvaluator:
 
         df['embedding_patch'] = df['embedding_patch'].apply(reshape_embedding)
 
-        # Load config to get global bounds
         global_bounds = None
         if config_path.exists():
             with open(config_path, 'r') as f:
                 config = json.load(f)
                 global_bounds = config.get('global_bounds', None)
 
-        # Create dataset - use fixed context ratio for evaluation
-        # Set context_ratio_range to (0.5, 0.5) for deterministic splits
         dataset = GEDINeuralProcessDataset(
             data_df=df,
             min_shots_per_tile=2,
-            context_ratio_range=(0.5, 0.5),  # Fixed 50/50 split
+            context_ratio_range=(0.5, 0.5),
             normalize_coords=True,
-            augment_coords=False,  # No augmentation for evaluation
+            augment_coords=False,  # no aug for evaluation
             coord_noise_std=0.0,
             global_bounds=global_bounds
         )
 
-        # Create dataloader
         dataloader = DataLoader(
             dataset,
             batch_size=self.batch_size,
@@ -240,7 +214,6 @@ class SpatialExtrapolationEvaluator:
         train_region: str,
         test_region: str
     ) -> dict:
-        """Evaluate ANP model on a region's test set."""
         all_preds = []
         all_targets = []
         all_uncertainties = []
@@ -249,9 +222,8 @@ class SpatialExtrapolationEvaluator:
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc=f"ANP {train_region}→{test_region}"):
-                # Process each tile in the batch (batch is list of tiles)
+                # each tile in the batch (batch is list of tiles)
                 for i in range(len(batch['context_coords'])):
-                    # Get data for this tile
                     context_coords = batch['context_coords'][i].to(self.device)
                     context_embeddings = batch['context_embeddings'][i].to(self.device)
                     context_agbd = batch['context_agbd'][i].to(self.device)
@@ -259,7 +231,6 @@ class SpatialExtrapolationEvaluator:
                     target_embeddings = batch['target_embeddings'][i].to(self.device)
                     target_agbd = batch['target_agbd'][i].to(self.device)
 
-                    # Forward pass
                     pred_mean, pred_log_var, _, _ = model(
                         context_coords,
                         context_embeddings,
@@ -269,29 +240,23 @@ class SpatialExtrapolationEvaluator:
                         training=False
                     )
 
-                    # Convert log_var to std
                     if pred_log_var is not None:
                         pred_std = torch.exp(0.5 * pred_log_var)
                     else:
                         pred_std = torch.zeros_like(pred_mean)
 
-                    # Collect predictions
                     all_preds.append(pred_mean.cpu().numpy())
                     all_targets.append(target_agbd.cpu().numpy())
                     all_uncertainties.append(pred_std.cpu().numpy())
 
-        # Concatenate
         preds = np.concatenate(all_preds, axis=0).squeeze()
         targets = np.concatenate(all_targets, axis=0).squeeze()
         uncertainties = np.concatenate(all_uncertainties, axis=0).squeeze()
 
-        # Compute metrics
         metrics = compute_metrics(preds, targets, uncertainties)
 
-        # Compute calibration metrics
         calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
 
-        # Rename metrics to include 'log_' prefix (all metrics are in log space)
         log_metrics = {
             'log_rmse': metrics['rmse'],
             'log_mae': metrics['mae'],
@@ -300,7 +265,6 @@ class SpatialExtrapolationEvaluator:
         if 'mean_uncertainty' in metrics:
             log_metrics['mean_uncertainty'] = metrics['mean_uncertainty']
 
-        # Combine metrics
         results = {
             **log_metrics,
             **calib_metrics,
@@ -319,7 +283,6 @@ class SpatialExtrapolationEvaluator:
         train_region: str,
         test_region: str
     ) -> dict:
-        """Evaluate XGBoost model on a region's test set."""
         all_preds = []
         all_targets = []
         all_uncertainties = []
@@ -327,14 +290,11 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Evaluating XGBoost {train_region} → {test_region}")
 
         for batch in tqdm(dataloader, desc=f"XGB {train_region}→{test_region}"):
-            # Process each tile in the batch (batch is list of tiles)
             for i in range(len(batch['target_coords'])):
-                # Get data for this tile (only need target points for XGBoost)
                 target_coords = batch['target_coords'][i].cpu().numpy()
                 target_embeddings = batch['target_embeddings'][i].cpu().numpy()
                 target_agbd = batch['target_agbd'][i].cpu().numpy()
 
-                # Predict using XGBoost
                 preds, uncertainties = model.predict(
                     target_coords,
                     target_embeddings,
@@ -345,18 +305,14 @@ class SpatialExtrapolationEvaluator:
                 all_targets.append(target_agbd.squeeze())
                 all_uncertainties.append(uncertainties)
 
-        # Concatenate
         preds = np.concatenate(all_preds, axis=0)
         targets = np.concatenate(all_targets, axis=0)
         uncertainties = np.concatenate(all_uncertainties, axis=0)
 
-        # Compute metrics
         metrics = compute_metrics(preds, targets, uncertainties)
 
-        # Compute calibration metrics
         calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
 
-        # Rename metrics to include 'log_' prefix (all metrics are in log space)
         log_metrics = {
             'log_rmse': metrics['rmse'],
             'log_mae': metrics['mae'],
@@ -365,7 +321,6 @@ class SpatialExtrapolationEvaluator:
         if 'mean_uncertainty' in metrics:
             log_metrics['mean_uncertainty'] = metrics['mean_uncertainty']
 
-        # Combine metrics
         results = {
             **log_metrics,
             **calib_metrics,
@@ -378,7 +333,6 @@ class SpatialExtrapolationEvaluator:
         return results
 
     def run_cross_evaluation(self, model_types: List[str] = ['anp', 'xgboost']) -> pd.DataFrame:
-        """Run cross-evaluation matrix for specified model types."""
         results = []
 
         for model_type in model_types:
@@ -386,7 +340,6 @@ class SpatialExtrapolationEvaluator:
             logger.info(f"Evaluating {model_type.upper()} models")
             logger.info(f"{'='*60}\n")
 
-            # Load all models
             models = {}
             for region in REGION_ORDER:
                 if model_type == 'anp':
@@ -400,14 +353,13 @@ class SpatialExtrapolationEvaluator:
                 if model_data is not None:
                     models[region] = model_data
 
-            # Load all test datasets
             test_loaders = {}
             for region in REGION_ORDER:
                 loader = self.load_test_data(region)
                 if loader is not None:
                     test_loaders[region] = loader
 
-            # Cross-evaluation: train_region × test_region
+            # train_region x test_region
             for train_region in REGION_ORDER:
                 if train_region not in models:
                     logger.warning(f"Skipping {train_region} (model not found)")
@@ -422,7 +374,6 @@ class SpatialExtrapolationEvaluator:
 
                     test_loader = test_loaders[test_region]
 
-                    # Evaluate
                     if model_type == 'anp':
                         result = self.evaluate_anp_on_region(
                             model, test_loader, train_region, test_region
@@ -434,10 +385,8 @@ class SpatialExtrapolationEvaluator:
 
                     results.append(result)
 
-        # Convert to DataFrame
         df = pd.DataFrame(results)
 
-        # Save results
         output_path = self.output_dir / 'spatial_extrapolation_results.csv'
         df.to_csv(output_path, index=False)
         logger.info(f"Saved results to {output_path}")
@@ -456,25 +405,19 @@ class SpatialExtrapolationEvaluator:
         reverse_cmap: bool = False,
         ax: Optional[plt.Axes] = None
     ) -> plt.Axes:
-        """Create a heatmap for a specific model type and metric."""
-        # Filter data
         df_model = df[df['model_type'] == model_type]
 
-        # Pivot to matrix
         matrix = df_model.pivot(
             index='train_region',
             columns='test_region',
             values=metric
         )
 
-        # Reorder to match REGION_ORDER
         matrix = matrix.reindex(index=REGION_ORDER, columns=REGION_ORDER)
 
-        # Reverse colormap if needed (e.g., for RMSE where lower is better)
         if reverse_cmap:
             cmap = cmap + '_r'
 
-        # Create heatmap
         if ax is None:
             fig, ax = plt.subplots(figsize=(8, 7))
 
@@ -491,12 +434,9 @@ class SpatialExtrapolationEvaluator:
             linecolor='gray'
         )
 
-        # Labels
         ax.set_xlabel('Test Region', fontsize=12)
         ax.set_ylabel('Train Region', fontsize=12)
         ax.set_title(f'{model_type.upper()}: {metric_name}', fontsize=14, fontweight='bold')
-
-        # Format tick labels
         ax.set_xticklabels([REGIONS[r] for r in REGION_ORDER], rotation=45, ha='right')
         ax.set_yticklabels([REGIONS[r] for r in REGION_ORDER], rotation=0)
 
@@ -510,10 +450,9 @@ class SpatialExtrapolationEvaluator:
         cmap: str = 'RdYlGn',
         reverse_cmap: bool = False
     ) -> plt.Figure:
-        """Create side-by-side comparison heatmaps for ANP and XGBoost."""
         fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
-        # Determine shared vmin/vmax for fair comparison
+        # shared vmin/vmax
         vmin = df[metric].min()
         vmax = df[metric].max()
 
@@ -537,10 +476,9 @@ class SpatialExtrapolationEvaluator:
         return fig
 
     def visualize_results(self, df: pd.DataFrame):
-        """Create comprehensive visualizations of spatial extrapolation results."""
         logger.info("\nCreating visualizations...")
 
-        # 1. R² comparison
+        # R2 comparison
         fig = self.create_comparison_heatmap(
             df, 'log_r2', 'Log R²', cmap='RdYlGn', reverse_cmap=False
         )
@@ -548,7 +486,7 @@ class SpatialExtrapolationEvaluator:
         plt.close(fig)
         logger.info("Saved R² comparison")
 
-        # 2. RMSE comparison
+        # RMSE comparison
         fig = self.create_comparison_heatmap(
             df, 'log_rmse', 'Log RMSE', cmap='RdYlGn', reverse_cmap=True
         )
@@ -556,12 +494,11 @@ class SpatialExtrapolationEvaluator:
         plt.close(fig)
         logger.info("Saved RMSE comparison")
 
-        # 3. Coverage comparison (THE KEY PLOT!)
+        # Coverage comparison
         if 'coverage_1sigma' in df.columns:
             fig = self.create_comparison_heatmap(
                 df, 'coverage_1sigma', '1σ Coverage', cmap='RdYlGn', reverse_cmap=False
             )
-            # Add reference line at ideal coverage (0.68)
             for ax in fig.axes[:2]:
                 ax.text(
                     0.5, -0.15, 'Ideal: 0.683',
@@ -581,18 +518,14 @@ class SpatialExtrapolationEvaluator:
             plt.close(fig)
             logger.info("Saved uncertainty comparison")
 
-        # 5. Summary statistics table
         self.create_summary_table(df)
 
     def create_summary_table(self, df: pd.DataFrame):
-        """Create summary statistics table."""
         logger.info("\nCreating summary statistics...")
 
-        # Separate diagonal (in-distribution) from off-diagonal (out-of-distribution)
         df['is_diagonal'] = df['train_region'] == df['test_region']
         df['split'] = df['is_diagonal'].map({True: 'In-Distribution', False: 'Out-of-Distribution'})
 
-        # Compute summary statistics
         summary = df.groupby(['model_type', 'split']).agg({
             'log_r2': ['mean', 'std'],
             'log_rmse': ['mean', 'std'],
@@ -600,23 +533,19 @@ class SpatialExtrapolationEvaluator:
             'mean_uncertainty': ['mean', 'std']
         }).round(3)
 
-        # Save to CSV
         output_path = self.output_dir / 'extrapolation_summary.csv'
         summary.to_csv(output_path)
         logger.info(f"Saved summary to {output_path}")
 
-        # Print to console
         print("\n" + "="*80)
         print("SPATIAL EXTRAPOLATION SUMMARY")
         print("="*80)
         print(summary)
         print("="*80)
 
-        # Compute degradation metrics
         self.compute_degradation_metrics(df)
 
     def compute_degradation_metrics(self, df: pd.DataFrame):
-        """Compute how much performance degrades from in-dist to out-of-dist."""
         logger.info("\nComputing degradation metrics...")
 
         results = []
@@ -624,13 +553,10 @@ class SpatialExtrapolationEvaluator:
         for model_type in df['model_type'].unique():
             df_model = df[df['model_type'] == model_type]
 
-            # In-distribution (diagonal)
             df_in = df_model[df_model['is_diagonal']]
 
-            # Out-of-distribution (off-diagonal)
             df_out = df_model[~df_model['is_diagonal']]
 
-            # Compute degradation
             degradation = {
                 'model_type': model_type,
                 'r2_in_dist': df_in['log_r2'].mean(),
@@ -729,7 +655,6 @@ Examples:
 def main():
     args = parse_args()
 
-    # Create evaluator
     evaluator = SpatialExtrapolationEvaluator(
         results_dir=Path(args.results_dir),
         output_dir=Path(args.output_dir),
@@ -738,18 +663,16 @@ def main():
         batch_size=args.batch_size
     )
 
-    # Run cross-evaluation
     logger.info("\nStarting spatial extrapolation cross-evaluation...")
     logger.info(f"Model types: {args.models}")
     logger.info(f"Regions: {list(REGIONS.values())}\n")
 
     df_results = evaluator.run_cross_evaluation(model_types=args.models)
 
-    # Create visualizations
     evaluator.visualize_results(df_results)
 
     logger.info("\n" + "="*80)
-    logger.info("EVALUATION COMPLETE!")
+    logger.info("EVALUATION COMPLETE")
     logger.info(f"Results saved to: {evaluator.output_dir}")
     logger.info("="*80 + "\n")
 

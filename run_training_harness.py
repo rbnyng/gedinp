@@ -1,32 +1,3 @@
-#!/usr/bin/env python3
-"""
-Training Harness for Multi-Seed Experiments and Architecture Ablation Studies
-
-This script runs training multiple times with different random seeds to compute
-mean and standard deviation of metrics, providing statistically robust results.
-
-It also supports architecture ablation studies to compare different model variants.
-
-Usage examples:
-  # Run Neural Process with 5 seeds
-  python run_training_harness.py --script train.py --n_seeds 5 \\
-      --region_bbox -122.5 37.0 -122.0 37.5 --output_dir results/multi_seed
-
-  # Run baselines with specific seeds
-  python run_training_harness.py --script train_baselines.py \\
-      --seeds 42 43 44 45 46 --region_bbox -122.5 37.0 -122.0 37.5 \\
-      --output_dir results/baselines
-
-  # Run architecture ablation study (compares all 4 architectures)
-  python run_training_harness.py --script train.py --ablation_mode \\
-      --region_bbox -122.5 37.0 -122.0 37.5 --output_dir results/ablation
-
-  # Run ablation study with multiple seeds and specific architectures
-  python run_training_harness.py --script train.py --ablation_mode \\
-      --seeds 42 43 44 --architectures cnp anp \\
-      --region_bbox -122.5 37.0 -122.0 37.5 --output_dir results/ablation_multi
-"""
-
 import argparse
 import json
 import subprocess
@@ -102,20 +73,18 @@ def parse_args():
 
     # Baseline specific arguments (for train_baselines.py)
     parser.add_argument('--models', type=str, nargs='+',
-                        default=['rf', 'xgb', 'idw', 'lr', 'mlp-dropout', 'mlp-ensemble'],
-                        choices=['rf', 'xgb', 'idw', 'lr', 'mlp-dropout', 'mlp-ensemble'],
+                        default=['rf', 'xgb', 'idw', 'lr', 'mlp-dropout'],
+                        choices=['rf', 'xgb', 'idw', 'lr', 'mlp-dropout'],
                         help='[train_baselines.py only] Which baseline models to train')
 
     args = parser.parse_args()
 
-    # Validate seed specification (not needed in ablation mode with single seed)
     if not args.ablation_mode:
         if args.n_seeds is None and args.seeds is None:
             parser.error('Must specify either --n_seeds or --seeds')
         if args.n_seeds is not None and args.seeds is not None:
             parser.error('Cannot specify both --n_seeds and --seeds')
     else:
-        # In ablation mode, use single seed if not specified
         if args.seeds is None and args.n_seeds is None:
             args.seeds = [args.base_seed]
         if args.script != 'train.py':
@@ -125,7 +94,6 @@ def parse_args():
 
 
 def generate_seeds(args):
-    """Generate list of seeds based on arguments."""
     if args.seeds is not None:
         return args.seeds
     else:
@@ -133,13 +101,11 @@ def generate_seeds(args):
 
 
 def run_training_single_seed(script, seed, output_subdir, args):
-    """Run training script with a single seed."""
     print("=" * 80)
     print(f"Running {script} with seed={seed}")
     print(f"Output: {output_subdir}")
     print("=" * 80)
 
-    # Build command
     cmd = [
         sys.executable, script,
         '--region_bbox', *[str(x) for x in args.region_bbox],
@@ -151,7 +117,6 @@ def run_training_single_seed(script, seed, output_subdir, args):
         '--seed', str(seed),
     ]
 
-    # Add script-specific arguments
     if script == 'train.py':
         cmd.extend([
             '--architecture_mode', args.architecture_mode,
@@ -169,7 +134,6 @@ def run_training_single_seed(script, seed, output_subdir, args):
             '--buffer_size', str(args.buffer_size),
         ])
 
-    # Run training
     start_time = datetime.now()
     result = subprocess.run(cmd, capture_output=True, text=True)
     end_time = datetime.now()
@@ -186,7 +150,6 @@ def run_training_single_seed(script, seed, output_subdir, args):
 
 
 def collect_results_neural_process(output_subdirs, ablation_mode=False):
-    """Collect results from Neural Process training runs."""
     results = []
 
     for output_dir in output_subdirs:
@@ -194,18 +157,15 @@ def collect_results_neural_process(output_subdirs, ablation_mode=False):
             continue
 
         try:
-            # Load config
             with open(output_dir / 'config.json', 'r') as f:
                 config = json.load(f)
 
-            # Load best model checkpoint
             checkpoint = torch.load(
                 output_dir / 'best_r2_model.pt',
                 map_location='cpu',
                 weights_only=False
             )
 
-            # Extract metrics
             seed = config['seed']
             architecture = config.get('architecture_mode', 'unknown')
             val_metrics = checkpoint.get('val_metrics', {})
@@ -238,7 +198,6 @@ def collect_results_neural_process(output_subdirs, ablation_mode=False):
                 'mean_uncertainty': val_metrics.get('mean_uncertainty', np.nan),
             }
 
-            # Add architecture column for ablation mode
             if ablation_mode:
                 result_dict['architecture'] = architecture
 
@@ -252,7 +211,6 @@ def collect_results_neural_process(output_subdirs, ablation_mode=False):
 
 
 def collect_results_baselines(output_subdirs):
-    """Collect results from baseline training runs."""
     results = []
 
     for output_dir in output_subdirs:
@@ -260,17 +218,14 @@ def collect_results_baselines(output_subdirs):
             continue
 
         try:
-            # Load config
             with open(output_dir / 'config.json', 'r') as f:
                 config = json.load(f)
 
-            # Load results
             with open(output_dir / 'results.json', 'r') as f:
                 model_results = json.load(f)
 
             seed = config['seed']
 
-            # Extract metrics for each model
             for model_name, metrics_dict in model_results.items():
                 val_metrics = metrics_dict['val_metrics']
                 test_metrics = metrics_dict['test_metrics']
@@ -310,20 +265,16 @@ def collect_results_baselines(output_subdirs):
 
 
 def compute_statistics(df, group_by=None):
-    """Compute mean, std, min, max for metrics."""
     metric_cols = [col for col in df.columns if any(
         metric in col for metric in ['rmse', 'mae', 'r2', 'uncertainty', 'time', 'z_mean', 'z_std', 'coverage']
     )]
 
     if group_by:
         grouped = df.groupby(group_by)[metric_cols]
-        # Use agg to compute all statistics at once
         stats = grouped.agg(['mean', 'std', 'min', 'max', 'median'])
-        # Flatten the MultiIndex columns
         stats.columns = ['_'.join(col).strip() for col in stats.columns.values]
         stats = stats.reset_index()
     else:
-        # No grouping, compute statistics across all rows
         stats_dict = {}
         for col in metric_cols:
             stats_dict[f'{col}_mean'] = [df[col].mean()]
@@ -337,7 +288,6 @@ def compute_statistics(df, group_by=None):
 
 
 def create_visualizations(df, output_dir, script_type):
-    """Create visualization plots for multi-seed results."""
     if script_type == 'train.py':
         create_neural_process_plots(df, output_dir)
     elif script_type == 'train_baselines.py':
@@ -345,7 +295,6 @@ def create_visualizations(df, output_dir, script_type):
 
 
 def create_neural_process_plots(df, output_dir):
-    """Create plots for Neural Process results."""
     fig, axes = plt.subplots(2, 5, figsize=(24, 8))
     fig.suptitle('Neural Process Multi-Seed Results', fontsize=16, fontweight='bold')
 
@@ -364,19 +313,15 @@ def create_neural_process_plots(df, output_dir):
             col = f'{split}_{metric}'
 
             if col in df.columns:
-                # Box plot
                 ax.boxplot([df[col].dropna()], labels=[''], widths=0.5)
 
-                # Overlay individual points
                 x = np.random.normal(1, 0.04, size=len(df))
                 ax.scatter(x, df[col], alpha=0.6, s=50)
 
-                # Add mean line
                 mean_val = df[col].mean()
                 ax.axhline(mean_val, color='r', linestyle='--', linewidth=2,
                           label=f'Mean: {mean_val:.4f}')
 
-                # Add std annotation
                 std_val = df[col].std()
                 ax.text(0.05, 0.95, f'μ ± σ: {mean_val:.4f} ± {std_val:.4f}',
                        transform=ax.transAxes, verticalalignment='top',
@@ -392,7 +337,6 @@ def create_neural_process_plots(df, output_dir):
 
 
 def create_baseline_plots(df, output_dir):
-    """Create plots for baseline model results."""
     models = df['model'].unique()
     n_models = len(models)
 
@@ -414,14 +358,11 @@ def create_baseline_plots(df, output_dir):
             col = f'{split}_{metric}'
 
             if col in df.columns:
-                # Prepare data for box plot
                 data = [df[df['model'] == model][col].dropna() for model in models]
                 positions = range(1, n_models + 1)
 
-                # Box plot
                 bp = ax.boxplot(data, positions=positions, labels=models, widths=0.5)
 
-                # Overlay individual points
                 for i, model in enumerate(models):
                     model_data = df[df['model'] == model][col].dropna()
                     x = np.random.normal(i + 1, 0.04, size=len(model_data))
@@ -438,9 +379,7 @@ def create_baseline_plots(df, output_dir):
 
 
 def create_comparison_plot(stats_df, output_dir, script_type):
-    """Create a comparison plot with error bars showing mean ± std."""
     if script_type == 'train_baselines.py' and 'model' in stats_df.columns:
-        # Baseline comparison
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         fig.suptitle('Model Comparison: Mean ± Std Dev (Test Set)',
                      fontsize=16, fontweight='bold')
@@ -464,11 +403,9 @@ def create_comparison_plot(stats_df, output_dir, script_type):
                 x = range(len(models))
                 colors = sns.color_palette("husl", len(models))
 
-                # Bar plot with error bars
                 ax.bar(x, means, yerr=stds, capsize=5, color=colors, alpha=0.7,
                       error_kw={'linewidth': 2})
 
-                # Add value labels
                 for i, (mean, std) in enumerate(zip(means, stds)):
                     ax.text(i, mean + std + 0.02 * abs(mean),
                            f'{mean:.3f}±{std:.3f}',
@@ -483,7 +420,6 @@ def create_comparison_plot(stats_df, output_dir, script_type):
                 if metric == 'test_log_r2':
                     ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
 
-        # Hide the unused subplot (6th position in 2x3 grid)
         axes.flat[5].axis('off')
 
         plt.tight_layout()
@@ -491,7 +427,6 @@ def create_comparison_plot(stats_df, output_dir, script_type):
         print(f"Saved comparison plot to: {output_dir / 'model_comparison.png'}")
 
     else:
-        # Single model (Neural Process)
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         fig.suptitle('Test Set Performance: Mean ± Std Dev',
                      fontsize=16, fontweight='bold')
@@ -519,7 +454,6 @@ def create_comparison_plot(stats_df, output_dir, script_type):
                         ha='center', va='bottom', fontsize=12, fontweight='bold')
                 ax.grid(True, alpha=0.3, axis='y')
 
-        # Hide the unused subplot (6th position in 2x3 grid)
         axes.flat[5].axis('off')
 
         plt.tight_layout()
@@ -528,8 +462,6 @@ def create_comparison_plot(stats_df, output_dir, script_type):
 
 
 def create_ablation_comparison_plots(df, output_dir):
-    """Create architecture comparison plots for ablation study."""
-    # Group by architecture for comparison
     arch_stats = df.groupby('architecture').agg({
         'val_log_r2': ['mean', 'std'],
         'val_log_rmse': ['mean', 'std'],
@@ -544,13 +476,10 @@ def create_ablation_comparison_plots(df, output_dir):
         'mean_uncertainty': ['mean', 'std']
     }).reset_index()
 
-    # Flatten column names
     arch_stats.columns = ['_'.join(col).strip('_') for col in arch_stats.columns.values]
 
-    # Sort by test R² (descending)
     arch_stats = arch_stats.sort_values('test_log_r2_mean', ascending=False)
 
-    # Save to CSV
     arch_stats.to_csv(output_dir / 'ablation_results.csv', index=False)
 
     print("\n" + "=" * 80)
@@ -559,11 +488,9 @@ def create_ablation_comparison_plots(df, output_dir):
     print(arch_stats.to_string(index=False))
     print("=" * 80)
 
-    # Create comparison plot
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     fig.suptitle('Architecture Ablation Study - Validation vs Test Performance', fontsize=16, fontweight='bold')
 
-    # R² comparison
     ax = axes[0, 0]
     x = np.arange(len(arch_stats))
     width = 0.35
@@ -580,7 +507,6 @@ def create_ablation_comparison_plots(df, output_dir):
     ax.grid(True, alpha=0.3)
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-    # Log RMSE comparison
     ax = axes[0, 1]
     ax.bar(x - width/2, arch_stats['val_log_rmse_mean'], width,
            yerr=arch_stats['val_log_rmse_std'], label='Validation', alpha=0.8, capsize=5)
@@ -594,7 +520,6 @@ def create_ablation_comparison_plots(df, output_dir):
     ax.grid(True, alpha=0.3)
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-    # Log MAE comparison
     ax = axes[0, 2]
     ax.bar(x - width/2, arch_stats['val_log_mae_mean'], width,
            yerr=arch_stats['val_log_mae_std'], label='Validation', alpha=0.8, capsize=5)
@@ -608,7 +533,6 @@ def create_ablation_comparison_plots(df, output_dir):
     ax.grid(True, alpha=0.3)
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-    # Test R² only (for clarity)
     ax = axes[1, 0]
     colors = sns.color_palette("husl", len(arch_stats))
     ax.bar(arch_stats['architecture'], arch_stats['test_log_r2_mean'],
@@ -619,7 +543,6 @@ def create_ablation_comparison_plots(df, output_dir):
     ax.grid(True, alpha=0.3)
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-    # Validation vs Test R² scatter
     ax = axes[1, 1]
     ax.scatter(arch_stats['val_log_r2_mean'], arch_stats['test_log_r2_mean'],
                s=100, alpha=0.6, c=colors)
@@ -636,7 +559,6 @@ def create_ablation_comparison_plots(df, output_dir):
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # Uncertainty comparison
     ax = axes[1, 2]
     ax.bar(arch_stats['architecture'], arch_stats['mean_uncertainty_mean'],
            yerr=arch_stats['mean_uncertainty_std'], color=colors, capsize=5)
@@ -653,7 +575,6 @@ def create_ablation_comparison_plots(df, output_dir):
 
 
 def write_ablation_summary(df, arch_stats, output_dir, args):
-    """Write ablation study summary report."""
     report_path = output_dir / 'ablation_summary.txt'
 
     with open(report_path, 'w') as f:
@@ -690,7 +611,6 @@ def write_ablation_summary(df, arch_stats, output_dir, args):
         f.write(f"  Log RMSE: {best['test_log_rmse_mean']:.4f} ± {best['test_log_rmse_std']:.4f}\n")
         f.write(f"  Log MAE: {best['test_log_mae_mean']:.4f} ± {best['test_log_mae_std']:.4f}\n\n")
 
-        # Compare architectures
         cnp_idx = arch_stats[arch_stats['architecture'] == 'cnp'].index
         det_idx = arch_stats[arch_stats['architecture'] == 'deterministic'].index
         lat_idx = arch_stats[arch_stats['architecture'] == 'latent'].index
@@ -732,7 +652,6 @@ def write_ablation_summary(df, arch_stats, output_dir, args):
 
 
 def write_summary_report(df, stats_df, output_dir, script_type, args, total_duration):
-    """Write a comprehensive text summary report."""
     report_path = output_dir / 'harness_summary.txt'
 
     with open(report_path, 'w') as f:
@@ -799,15 +718,6 @@ def write_summary_report(df, stats_df, output_dir, script_type, args, total_dura
             f.write(f"  Test MAE:       {test_linear_mae_mean:.2f} ± {test_linear_mae_std:.2f} Mg/ha\n\n")
             f.write(f"Coefficient of Variation (Log R²): {(test_log_r2_std/test_log_r2_mean)*100:.2f}%\n\n")
 
-            # Interpret stability
-            cv = (test_log_r2_std / test_log_r2_mean) * 100
-            if cv < 5:
-                f.write("→ Results are very stable across seeds (CV < 5%)\n")
-            elif cv < 10:
-                f.write("→ Results show moderate variability (5% ≤ CV < 10%)\n")
-            else:
-                f.write("→ Results show high variability (CV ≥ 10%). Consider more seeds.\n")
-
         elif script_type == 'train_baselines.py':
             f.write("Best model per metric (Test Set):\n\n")
 
@@ -839,14 +749,11 @@ def write_summary_report(df, stats_df, output_dir, script_type, args, total_dura
 def main():
     args = parse_args()
 
-    # Generate seeds
     seeds = generate_seeds(args)
 
-    # Setup output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save harness configuration
     harness_config = {
         'script': args.script,
         'seeds': seeds,
@@ -872,13 +779,11 @@ def main():
     print(f"Output directory: {output_dir}")
     print("=" * 80 + "\n")
 
-    # Run training for each seed (and architecture if ablation mode)
     output_subdirs = []
     durations = []
     start_time_total = datetime.now()
 
     if args.ablation_mode:
-        # Ablation mode: iterate over architectures × seeds
         original_arch_mode = args.architecture_mode
         run_num = 0
         total_runs = len(args.architectures) * len(seeds)
@@ -905,11 +810,9 @@ def main():
                 if result_dir is None:
                     print(f"WARNING: Run with {arch} seed={seed} failed. Continuing...")
 
-        # Restore original architecture mode
         args.architecture_mode = original_arch_mode
 
     else:
-        # Normal mode: iterate over seeds only
         for i, seed in enumerate(seeds, 1):
             print(f"\n{'=' * 80}")
             print(f"RUN {i}/{len(seeds)}: Seed {seed}")
@@ -930,7 +833,6 @@ def main():
     end_time_total = datetime.now()
     total_duration = (end_time_total - start_time_total).total_seconds()
 
-    # Collect results
     print("\n" + "=" * 80)
     print("COLLECTING RESULTS")
     print("=" * 80)
@@ -949,7 +851,6 @@ def main():
         print("ERROR: No results collected. All training runs may have failed.")
         return
 
-    # Save results
     df.to_csv(output_dir / 'all_runs.csv', index=False)
     stats_df.to_csv(output_dir / 'statistics.csv', index=False)
 
@@ -957,20 +858,16 @@ def main():
     print(f"Saved individual results to: {output_dir / 'all_runs.csv'}")
     print(f"Saved statistics to: {output_dir / 'statistics.csv'}")
 
-    # Create visualizations
     print("\n" + "=" * 80)
     print("GENERATING VISUALIZATIONS")
     print("=" * 80)
 
     if args.ablation_mode:
-        # Ablation-specific visualizations
         arch_stats = create_ablation_comparison_plots(df, output_dir)
     else:
-        # Normal multi-seed visualizations
         create_visualizations(df, output_dir, args.script)
         create_comparison_plot(stats_df, output_dir, args.script)
 
-    # Write summary report
     print("\n" + "=" * 80)
     print("GENERATING SUMMARY REPORT")
     print("=" * 80)
@@ -980,7 +877,6 @@ def main():
     else:
         write_summary_report(df, stats_df, output_dir, args.script, args, total_duration)
 
-    # Print final summary
     print("\n" + "=" * 80)
     if args.ablation_mode:
         print("ABLATION STUDY COMPLETE")
@@ -1004,8 +900,7 @@ def main():
         print("  - harness_summary.txt   # Comprehensive text report")
     print("=" * 80 + "\n")
 
-    # Print key statistics
-    print("KEY RESULTS:")
+    print("RESULTS:")
     print("-" * 80)
     if args.ablation_mode:
         display_cols = ['architecture', 'test_log_r2_mean', 'test_log_r2_std',

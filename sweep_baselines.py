@@ -1,7 +1,7 @@
 """
 Usage:
     # Multi-seed sweep
-    python analyze_pareto_frontier.py \
+    python sweep_baselines.py \
         --baseline_dir ./outputs_baselines \
         --output_dir ./outputs_pareto \
         --models rf xgb \
@@ -9,7 +9,7 @@ Usage:
         --quick
 
     # Explicit seed list
-    python analyze_pareto_frontier.py \
+    python sweep_baselines.py \
         --baseline_dir ./outputs_baselines \
         --output_dir ./outputs_pareto \
         --models rf xgb \
@@ -71,31 +71,16 @@ def parse_args():
 
 
 def compute_calibration_metrics(predictions, targets, stds):
-    """
-    Compute calibration metrics for uncertainty quantification.
-
-    Args:
-        predictions: (N,) array of predictions (in normalized log space)
-        targets: (N,) array of ground truth (in normalized log space)
-        stds: (N,) array of predicted standard deviations
-
-    Returns:
-        dict with calibration metrics
-    """
-    # Compute z-scores (standardized residuals)
     z_scores = (targets - predictions) / (stds + 1e-8)
 
-    # Z-score statistics
     z_mean = np.mean(z_scores)
     z_std = np.std(z_scores)
 
-    # Compute empirical coverage at key confidence levels
     abs_z = np.abs(z_scores)
     coverage_1sigma = np.sum(abs_z <= 1.0) / len(z_scores) * 100
     coverage_2sigma = np.sum(abs_z <= 2.0) / len(z_scores) * 100
     coverage_3sigma = np.sum(abs_z <= 3.0) / len(z_scores) * 100
 
-    # Calibration error (how far z_std is from ideal value of 1.0)
     calibration_error = abs(z_std - 1.0)
 
     return {
@@ -109,39 +94,18 @@ def compute_calibration_metrics(predictions, targets, stds):
 
 
 def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_transform=True):
-    """
-    Evaluate baseline model and compute metrics.
-
-    Args:
-        model: Baseline model (RF or XGBoost)
-        coords: Coordinates for prediction
-        embeddings: Embeddings for prediction
-        agbd_true: True AGBD values in linear space (Mg/ha)
-        agbd_scale: AGBD scale factor (default: 200.0)
-        log_transform: Whether log transform was used (default: True)
-
-    Returns:
-        metrics: Dict with metrics
-    """
-    # Predict (normalized, in log space)
     pred_norm, pred_std_norm = model.predict(coords, embeddings, return_std=True)
 
-    # Normalize true values to log space for log-space metrics
     agbd_true_norm = normalize_agbd(agbd_true, agbd_scale=agbd_scale, log_transform=log_transform)
 
-    # Compute log-space metrics
     log_metrics = compute_metrics(pred_norm, agbd_true_norm)
 
-    # Denormalize predictions to linear space
     pred = denormalize_agbd(pred_norm, agbd_scale=agbd_scale, log_transform=log_transform)
 
-    # Compute linear-space metrics
     linear_metrics = compute_metrics(pred, agbd_true)
 
-    # Compute calibration metrics (in normalized log space where model predicts)
     calibration_metrics = compute_calibration_metrics(pred_norm, agbd_true_norm, pred_std_norm)
 
-    # Combine metrics
     metrics = {
         'log_rmse': log_metrics['rmse'],
         'log_mae': log_metrics['mae'],
@@ -155,23 +119,11 @@ def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_t
 
 
 def get_hyperparameter_grid(model_type: str, quick: bool = False) -> List[Dict]:
-    """
-    Get hyperparameter grid for a model type.
-
-    Args:
-        model_type: 'rf' or 'xgb'
-        quick: If True, use smaller grid for quick testing
-
-    Returns:
-        List of hyperparameter dictionaries
-    """
     if model_type == 'rf':
         if quick:
-            # Quick sweep: ~12 configs
             max_depths = [3, 6, 10]
             n_estimators_list = [50, 100, 200, 500]
         else:
-            # Full sweep: ~30 configs
             max_depths = [1, 2, 3, 4, 6, 8, 10, 20]
             n_estimators_list = [50, 100, 200, 500, 1000]
 
@@ -184,11 +136,9 @@ def get_hyperparameter_grid(model_type: str, quick: bool = False) -> List[Dict]:
 
     elif model_type == 'xgb':
         if quick:
-            # Quick sweep: ~12 configs
             max_depths = [3, 6, 10]
             n_estimators_list = [50, 100, 200, 500]
         else:
-            # Full sweep: ~30 configs
             max_depths = [1, 2, 3, 4, 6, 8, 10, 20]
             n_estimators_list = [50, 100, 200, 500, 1000]
 
@@ -219,13 +169,6 @@ def train_and_evaluate_config(
     log_transform: bool,
     seed: int
 ) -> Dict:
-    """
-    Train and evaluate a single hyperparameter configuration.
-
-    Returns:
-        Dict with config, metrics, and training time
-    """
-    # Train model
     if model_type == 'rf':
         model = RandomForestBaseline(
             n_estimators=config['n_estimators'],
@@ -249,12 +192,10 @@ def train_and_evaluate_config(
         model.fit(train_coords, train_embeddings, train_agbd_norm)
     train_time = time() - start_time
 
-    # Evaluate on test set
     test_metrics = evaluate_model(
         model, test_coords, test_embeddings, test_agbd, agbd_scale, log_transform
     )
 
-    # Return results
     result = {
         'model_type': model_type,
         'config': config,
@@ -266,12 +207,6 @@ def train_and_evaluate_config(
 
 
 def load_existing_results(output_dir: Path) -> List[Dict]:
-    """
-    Load existing results if they exist.
-
-    Returns:
-        List of result dictionaries
-    """
     results_file = output_dir / 'pareto_results.json'
     if results_file.exists():
         with open(results_file, 'r') as f:
@@ -280,15 +215,9 @@ def load_existing_results(output_dir: Path) -> List[Dict]:
 
 
 def save_results(results: List[Dict], output_dir: Path):
-    """
-    Save results to JSON and CSV.
-    Handles both single-seed and multi-seed aggregated formats.
-    """
-    # Save JSON (with full detail including per-seed results)
     with open(output_dir / 'pareto_results.json', 'w') as f:
         json.dump(results, f, indent=2)
 
-    # Save CSV (aggregated view for easier analysis)
     rows = []
     for result in results:
         row = {
@@ -296,15 +225,12 @@ def save_results(results: List[Dict], output_dir: Path):
             **{f'config_{k}': v for k, v in result['config'].items()},
         }
 
-        # Check if this is aggregated (multi-seed) or single-seed result
         if 'aggregated_metrics' in result:
-            # Multi-seed: use aggregated metrics
             row['n_seeds'] = result['n_seeds']
             row['train_time_mean'] = result['train_time_mean']
             row['train_time_std'] = result['train_time_std']
             row.update(result['aggregated_metrics'])
         else:
-            # Single-seed: use test_metrics directly
             row['n_seeds'] = 1
             row['train_time'] = result['train_time']
             row.update(result['test_metrics'])
@@ -320,9 +246,6 @@ def save_results(results: List[Dict], output_dir: Path):
 
 
 def config_already_computed(config: Dict, model_type: str, existing_results: List[Dict]) -> bool:
-    """
-    Check if a configuration has already been computed.
-    """
     for result in existing_results:
         if result['model_type'] == model_type and result['config'] == config:
             return True
@@ -330,22 +253,11 @@ def config_already_computed(config: Dict, model_type: str, existing_results: Lis
 
 
 def aggregate_results_across_seeds(seed_results: List[Dict]) -> Dict:
-    """
-    Aggregate results from multiple seeds for the same configuration.
-
-    Args:
-        seed_results: List of result dicts from different seeds (same config)
-
-    Returns:
-        Dict with aggregated statistics (mean, std, min, max) for all metrics
-    """
     if not seed_results:
         return {}
 
-    # Use first result as template for structure
     template = seed_results[0]
 
-    # Aggregate metrics
     metric_keys = list(template['test_metrics'].keys())
     aggregated_metrics = {}
 
@@ -357,7 +269,6 @@ def aggregate_results_across_seeds(seed_results: List[Dict]) -> Dict:
         aggregated_metrics[f'{key}_max'] = np.max(values)
         aggregated_metrics[f'{key}_median'] = np.median(values)
 
-    # Aggregate training time
     train_times = [r['train_time'] for r in seed_results]
 
     aggregated = {
@@ -378,22 +289,16 @@ def aggregate_results_across_seeds(seed_results: List[Dict]) -> Dict:
 def main():
     args = parse_args()
 
-    # Generate seed list
     if args.seeds is not None:
-        # Use explicitly provided seeds
         seed_list = args.seeds
     else:
-        # Generate n_seeds starting from base seed
         seed_list = [args.seed + i for i in range(args.n_seeds)]
 
-    # Set numpy random seed for reproducibility
     np.random.seed(args.seed)
 
-    # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save configuration
     config_dict = vars(args)
     with open(output_dir / 'config.json', 'w') as f:
         json.dump(config_dict, f, indent=2)
@@ -407,7 +312,6 @@ def main():
     print(f"Output directory: {output_dir}")
     print()
 
-    # Load existing results if resuming
     existing_results = []
     if args.resume:
         existing_results = load_existing_results(output_dir)
@@ -415,17 +319,14 @@ def main():
             print(f"Resuming from {len(existing_results)} existing results")
             print()
 
-    # Load processed data from baseline training
     baseline_dir = Path(args.baseline_dir)
 
     print("Step 1: Loading processed data...")
-    # Load the full processed dataset (before splitting)
     with open(baseline_dir / 'processed_data.pkl', 'rb') as f:
         gedi_df = pickle.load(f)
 
     print(f"Loaded {len(gedi_df)} samples with embeddings")
 
-    # Load config for normalization and split parameters
     with open(baseline_dir / 'config.json', 'r') as f:
         baseline_config = json.load(f)
 
@@ -441,7 +342,6 @@ def main():
     print(f"Split ratios: val={val_ratio}, test={test_ratio}")
     print()
 
-    # Run hyperparameter sweep
     all_results = existing_results.copy()
 
     for model_type in args.models:
@@ -449,21 +349,16 @@ def main():
         print(f"HYPERPARAMETER SWEEP: {model_type.upper()}")
         print("=" * 80)
 
-        # Get hyperparameter grid
         grid = get_hyperparameter_grid(model_type, quick=args.quick)
         print(f"Total configurations: {len(grid)}")
         print()
 
-        # Train and evaluate each configuration across multiple seeds
         for config in tqdm(grid, desc=f"Training {model_type.upper()}"):
-            # Skip if already computed
             if args.resume and config_already_computed(config, model_type, existing_results):
                 continue
 
-            # Train and evaluate across all seeds
             seed_results = []
             for seed in seed_list:
-                # Create new data split for this seed
                 print(f"\nCreating data split with seed={seed}...")
                 splitter = BufferedSpatialSplitter(
                     gedi_df,
@@ -474,7 +369,6 @@ def main():
                 )
                 train_df, val_df, test_df = splitter.split()
 
-                # Prepare features for this split
                 train_coords = train_df[['longitude', 'latitude']].values
                 train_embeddings = np.stack(train_df['embedding_patch'].values)
                 train_agbd = train_df['agbd'].values
@@ -486,7 +380,6 @@ def main():
                 test_agbd = test_df['agbd'].values
                 test_coords_norm = normalize_coords(test_coords, global_bounds)
 
-                # Train and evaluate
                 result = train_and_evaluate_config(
                     model_type=model_type,
                     config=config,
@@ -502,16 +395,13 @@ def main():
                 )
                 seed_results.append(result)
 
-            # Aggregate results across seeds
             if len(seed_list) > 1:
                 aggregated_result = aggregate_results_across_seeds(seed_results)
             else:
-                # Single seed: keep original format for backward compatibility
                 aggregated_result = seed_results[0]
 
             all_results.append(aggregated_result)
 
-            # Save intermediate results
             save_results(all_results, output_dir)
 
     print()
@@ -521,7 +411,6 @@ def main():
     print(f"Total configurations evaluated: {len(all_results)}")
     print()
 
-    # Generate summary statistics
     print("SUMMARY BY MODEL:")
     print("-" * 80)
 
@@ -530,14 +419,11 @@ def main():
         if not model_results:
             continue
 
-        # Extract metrics (handle both single-seed and multi-seed formats)
         if 'aggregated_metrics' in model_results[0]:
-            # Multi-seed: use mean values
             log_r2_values = [r['aggregated_metrics']['log_r2_mean'] for r in model_results]
             cal_errors = [r['aggregated_metrics']['calibration_error_mean'] for r in model_results]
             train_times = [r['train_time_mean'] for r in model_results]
 
-            # Also get std values for reporting
             log_r2_stds = [r['aggregated_metrics']['log_r2_std'] for r in model_results]
             cal_error_stds = [r['aggregated_metrics']['calibration_error_std'] for r in model_results]
 
@@ -548,7 +434,6 @@ def main():
             print(f"  Calibration error std range: [{min(cal_error_stds):.4f}, {max(cal_error_stds):.4f}]")
             print(f"  Training time range (mean): [{min(train_times):.2f}s, {max(train_times):.2f}s]")
         else:
-            # Single-seed: use test_metrics directly
             log_r2_values = [r['test_metrics']['log_r2'] for r in model_results]
             cal_errors = [r['test_metrics']['calibration_error'] for r in model_results]
             train_times = [r['train_time'] for r in model_results]

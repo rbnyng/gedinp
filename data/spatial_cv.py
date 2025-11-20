@@ -1,9 +1,3 @@
-"""
-Spatial cross-validation utilities for tile-based splits.
-
-Ensures proper spatial separation between train/val/test sets to avoid data leakage.
-"""
-
 import numpy as np
 import pandas as pd
 from typing import Tuple, List, Dict, Optional
@@ -12,13 +6,6 @@ import random
 
 
 class SpatialTileSplitter:
-    """
-    Tile-based spatial cross-validation splitter.
-
-    Splits tiles (not individual shots) into train/val/test to ensure
-    spatial separation and avoid data leakage.
-    """
-
     def __init__(
         self,
         data_df: pd.DataFrame,
@@ -26,21 +13,11 @@ class SpatialTileSplitter:
         test_ratio: float = 0.15,
         random_state: int = 42
     ):
-        """
-        Initialize splitter.
-
-        Args:
-            data_df: DataFrame with 'tile_id' column
-            val_ratio: Fraction of tiles for validation
-            test_ratio: Fraction of tiles for test
-            random_state: Random seed for reproducibility
-        """
         self.data_df = data_df
         self.val_ratio = val_ratio
         self.test_ratio = test_ratio
         self.random_state = random_state
 
-        # Get unique tiles
         self.tile_ids = data_df['tile_id'].unique()
         self.n_tiles = len(self.tile_ids)
 
@@ -48,21 +25,14 @@ class SpatialTileSplitter:
         np.random.seed(random_state)
 
     def split(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Create train/val/test split.
-
-        Returns:
-            (train_df, val_df, test_df)
-        """
-        # Sort tiles to ensure consistent order before shuffling
-        # This ensures reproducibility even if input DataFrame row order varies
+        # Sort tiles to consistent order before shuffling
         sorted_tiles = np.sort(self.tile_ids)
 
         # Shuffle tiles
         shuffled_tiles = sorted_tiles.copy()
         np.random.shuffle(shuffled_tiles)
 
-        # Calculate split sizes
+        # split sizes
         n_test = max(1, int(self.n_tiles * self.test_ratio)) if self.test_ratio > 0 else 0
         n_val = max(1, int(self.n_tiles * self.val_ratio)) if self.val_ratio > 0 else 0
         n_train = self.n_tiles - n_test - n_val
@@ -72,7 +42,7 @@ class SpatialTileSplitter:
         val_tiles = shuffled_tiles[n_train:n_train + n_val]
         test_tiles = shuffled_tiles[n_train + n_val:]
 
-        # Create dataframe splits
+        # dataframe splits
         train_df = self.data_df[self.data_df['tile_id'].isin(train_tiles)]
         val_df = self.data_df[self.data_df['tile_id'].isin(val_tiles)]
         test_df = self.data_df[self.data_df['tile_id'].isin(test_tiles)]
@@ -85,15 +55,6 @@ class SpatialTileSplitter:
         return train_df, val_df, test_df
 
     def k_fold_split(self, n_folds: int = 5) -> List[Tuple[pd.DataFrame, pd.DataFrame]]:
-        """
-        Create k-fold cross-validation splits.
-
-        Args:
-            n_folds: Number of folds
-
-        Returns:
-            List of (train_df, val_df) tuples
-        """
         kf = KFold(n_splits=n_folds, shuffle=True, random_state=self.random_state)
 
         splits = []
@@ -114,16 +75,10 @@ class SpatialTileSplitter:
 
 
 class BufferedSpatialSplitter:
-    """
-    Spatial splitter with buffer zones between train/val/test.
-
-    Ensures tiles near boundaries are excluded to prevent spatial leakage.
-    """
-
     def __init__(
         self,
         data_df: pd.DataFrame,
-        buffer_size: float = 0.2,  # degrees
+        buffer_size: float = 0.1,  # degrees
         val_ratio: float = 0.15,
         test_ratio: float = 0.15,
         random_state: int = 42
@@ -147,7 +102,7 @@ class BufferedSpatialSplitter:
         random.seed(random_state)
         np.random.seed(random_state)
 
-        # Get tile centers
+        # tile centers
         self.tile_info = (
             data_df[['tile_id', 'tile_lon', 'tile_lat']]
             .drop_duplicates()
@@ -155,7 +110,6 @@ class BufferedSpatialSplitter:
         )
 
     def _compute_distance(self, tile1: str, tile2: str) -> float:
-        """Compute approximate distance between tile centers in degrees."""
         lon1, lat1 = self.tile_info.loc[tile1, ['tile_lon', 'tile_lat']]
         lon2, lat2 = self.tile_info.loc[tile2, ['tile_lon', 'tile_lat']]
 
@@ -163,17 +117,9 @@ class BufferedSpatialSplitter:
         return np.sqrt((lon2 - lon1)**2 + (lat2 - lat1)**2)
 
     def split(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Create buffered train/val/test split.
-
-        Returns:
-            (train_df, val_df, test_df)
-        """
-        # Sort tiles to ensure consistent order before shuffling
         tile_ids = np.sort(self.tile_info.index.values)
         n_tiles = len(tile_ids)
 
-        # Shuffle and select test tiles
         np.random.shuffle(tile_ids)
         n_test = max(1, int(n_tiles * self.test_ratio)) if self.test_ratio > 0 else 0
         test_tiles = tile_ids[:n_test]
@@ -219,7 +165,6 @@ class BufferedSpatialSplitter:
             if t not in val_tiles and t not in val_buffer_tiles
         ]
 
-        # Create dataframe splits
         train_df = self.data_df[self.data_df['tile_id'].isin(train_tiles)]
         val_df = self.data_df[self.data_df['tile_id'].isin(val_tiles)]
         test_df = self.data_df[self.data_df['tile_id'].isin(test_tiles)]
@@ -238,15 +183,6 @@ def analyze_spatial_split(
     val_df: pd.DataFrame,
     test_df: pd.DataFrame
 ) -> Dict:
-    """
-    Analyze spatial properties of a split.
-
-    Args:
-        train_df, val_df, test_df: DataFrames from a split
-
-    Returns:
-        Dictionary of analysis metrics
-    """
     def get_extent(df):
         return {
             'lon_range': (df['longitude'].min(), df['longitude'].max()),

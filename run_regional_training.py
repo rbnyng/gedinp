@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 """
 Usage:
-    # Run only specific regions
-    python run_regional_training.py --n_seeds 3 --regions maine hokkaido --cache_dir ./cache
-    
-    # Use specific seeds
-    python run_regional_training.py --seeds 42 69 9000 1618 54088 777 1314 3 67 80085 --cache_dir ./cache
-    
-    python run_regional_training.py --seeds 42 69 9001 1618 1 777 1314 2 67 6 --cache_dir ./cache
-    
-    
-    
     python run_regional_training.py --seeds 42 69 12345 1618 1 --cache_dir ./cache
 """
 
@@ -30,13 +20,13 @@ REGIONS = {
     'maine': {
         'name': 'Maine, USA',
         'bbox': [-70, 44, -69, 45],
-        'batch_size': 16,  # Default
+        'batch_size': 16,
         'description': 'Temperate mixed forest, northeastern USA'
     },
     'sudtirol': {
         'name': 'South Tyrol, Italy',
         'bbox': [10.5, 45.6, 11.5, 46.4],
-        'batch_size': 4,  # Smaller due to region size
+        'batch_size': 4, # smaller due to region size
         'description': 'Alpine coniferous forest, European Alps'
     },
     'ili': {
@@ -121,11 +111,9 @@ def parse_args():
 
     args = parser.parse_args()
 
-    # Validate
     if args.skip_anp and args.skip_baselines:
         parser.error('Cannot skip both ANP and baselines')
 
-    # Handle 'all' regions
     if args.regions == 'all' or 'all' in args.regions:
         args.regions = list(REGIONS.keys())
 
@@ -133,7 +121,6 @@ def parse_args():
 
 
 def generate_seeds(args):
-    """Generate list of seeds based on arguments."""
     if args.seeds is not None:
         return args.seeds
     else:
@@ -141,13 +128,11 @@ def generate_seeds(args):
 
 
 def run_harness_for_region(region_key, region_info, script, seeds, args, output_dir):
-    """Run the training harness for a single region and script."""
     print("\n" + "=" * 80)
     print(f"REGION: {region_info['name']}")
     print(f"SCRIPT: {script}")
     print("=" * 80)
 
-    # Build command
     cmd = [
         sys.executable, 'run_training_harness.py',
         '--script', script,
@@ -161,7 +146,6 @@ def run_harness_for_region(region_key, region_info, script, seeds, args, output_
         '--output_dir', str(output_dir),
     ]
 
-    # Add script-specific arguments
     if script == 'train.py':
         cmd.extend([
             '--architecture_mode', 'anp',
@@ -175,7 +159,6 @@ def run_harness_for_region(region_key, region_info, script, seeds, args, output_
             '--models', *args.baseline_models,
         ])
 
-    # Run harness
     print(f"\nExecuting: {' '.join(cmd)}\n")
     start_time = datetime.now()
     result = subprocess.run(cmd)
@@ -191,14 +174,12 @@ def run_harness_for_region(region_key, region_info, script, seeds, args, output_
 
 
 def collect_regional_results(regional_dirs, regions_info):
-    """Collect and aggregate results across all regions."""
     anp_results = []
     baseline_results = []
 
     for region_key, dirs in regional_dirs.items():
         region_name = regions_info[region_key]['name']
 
-        # Collect ANP results
         if dirs['anp'] is not None:
             stats_file = dirs['anp'] / 'statistics.csv'
             if stats_file.exists():
@@ -207,7 +188,6 @@ def collect_regional_results(regional_dirs, regions_info):
                 stats['region_key'] = region_key
                 anp_results.append(stats)
 
-        # Collect baseline results
         if dirs['baselines'] is not None:
             stats_file = dirs['baselines'] / 'statistics.csv'
             if stats_file.exists():
@@ -223,9 +203,6 @@ def collect_regional_results(regional_dirs, regions_info):
 
 
 def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
-    """Create comparison plots across regions."""
-
-    # Determine what we have
     has_anp = not anp_df.empty
     has_baselines = not baseline_df.empty
 
@@ -279,7 +256,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
                 if metric == 'test_log_r2':
                     ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
 
-        # Hide unused subplot
         axes.flat[5].axis('off')
 
         plt.tight_layout()
@@ -287,7 +263,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
         print(f"Saved ANP comparison to: {output_dir / 'anp_regional_comparison.png'}")
         plt.close()
 
-        # Plot calibration metrics if available
         calib_cols = [col for col in anp_df.columns if any(x in col for x in ['z_mean', 'z_std', 'coverage'])]
         if calib_cols:
             calib_metrics = []
@@ -322,7 +297,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
                         ax.bar(x, means, yerr=stds, capsize=5, color=colors, alpha=0.7,
                               error_kw={'linewidth': 2})
 
-                        # Add value labels
                         for i, (mean, std, region) in enumerate(zip(means, stds, regions)):
                             ax.text(i, mean + std + 0.02 * abs(mean) if mean >= 0 else mean - std - 0.02 * abs(mean),
                                    f'{mean:.2f}±{std:.2f}',
@@ -335,7 +309,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
                         ax.set_title(f'{label}')
                         ax.grid(True, alpha=0.3, axis='y')
 
-                        # Add reference lines for calibration metrics
                         if 'z_mean' in metric:
                             ax.axhline(y=0, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='Ideal: 0')
                             ax.legend()
@@ -352,7 +325,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
                             ax.axhline(y=99.7, color='r', linestyle='--', linewidth=1.5, alpha=0.7, label='Ideal: 99.7%')
                             ax.legend()
 
-                # Hide unused subplots
                 for idx in range(len(calib_metrics), 6):
                     axes.flat[idx].axis('off')
 
@@ -363,7 +335,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
 
     # Plot 2: Baseline comparison across regions
     if has_baselines:
-        # Create a plot for each region comparing models
         fig, axes = plt.subplots(len(baseline_df['region'].unique()), 2,
                                  figsize=(16, 6*len(baseline_df['region'].unique())))
         if len(baseline_df['region'].unique()) == 1:
@@ -373,7 +344,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
                      fontsize=16, fontweight='bold')
 
         for idx, (region, region_df) in enumerate(baseline_df.groupby('region')):
-            # R² comparison
             ax = axes[idx, 0]
             models = region_df['model']
             means = region_df['test_log_r2_mean']
@@ -390,7 +360,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
             ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
             ax.grid(True, alpha=0.3, axis='y')
 
-            # RMSE comparison
             ax = axes[idx, 1]
             means = region_df['test_linear_rmse_mean']
             stds = region_df['test_linear_rmse_std']
@@ -418,7 +387,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
             baseline_df.groupby('region')['test_log_r2_mean'].idxmax()
         ]
 
-        # Merge with ANP results
         comparison = pd.merge(
             anp_df[['region', 'test_log_r2_mean', 'test_log_r2_std',
                     'test_linear_rmse_mean', 'test_linear_rmse_std']],
@@ -428,7 +396,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
             suffixes=('_anp', '_baseline')
         )
 
-        # R² comparison
         ax = axes[0]
         x = np.arange(len(comparison))
         width = 0.35
@@ -448,7 +415,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
         ax.legend()
         ax.grid(True, alpha=0.3, axis='y')
 
-        # RMSE comparison
         ax = axes[1]
         ax.bar(x - width/2, comparison['test_linear_rmse_mean_anp'], width,
                yerr=comparison['test_linear_rmse_std_anp'], label='ANP',
@@ -471,7 +437,6 @@ def create_regional_comparison_plots(anp_df, baseline_df, output_dir):
 
 
 def write_regional_summary(anp_df, baseline_df, output_dir, args, total_duration):
-    """Write comprehensive summary report."""
     report_path = output_dir / 'regional_summary.txt'
 
     with open(report_path, 'w') as f:
@@ -526,7 +491,6 @@ def write_regional_summary(anp_df, baseline_df, output_dir, args, total_duration
                               'test_linear_rmse_mean', 'test_linear_rmse_std']
                 f.write(region_df[display_cols].to_string(index=False) + "\n")
 
-                # Add calibration metrics if available
                 calib_cols = [col for col in baseline_df.columns if any(x in col for x in ['z_mean', 'z_std', 'coverage'])]
                 if calib_cols:
                     display_calib_cols = ['model'] + [col for col in calib_cols if 'test' in col]
@@ -539,7 +503,7 @@ def write_regional_summary(anp_df, baseline_df, output_dir, args, total_duration
                 f.write(f"  Test Log R²: {best_model['test_log_r2_mean']:.4f} ± "
                        f"{best_model['test_log_r2_std']:.4f}\n")
 
-        # Combined comparison
+        # comparison
         if not anp_df.empty and not baseline_df.empty:
             f.write("\n" + "=" * 80 + "\n")
             f.write("ANP vs BEST BASELINE BY REGION\n")
@@ -572,11 +536,9 @@ def main():
     args = parse_args()
     seeds = generate_seeds(args)
 
-    # Setup output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save configuration
     config = {
         'timestamp': datetime.now().isoformat(),
         'regions': args.regions,
@@ -602,7 +564,6 @@ def main():
     print(f"Output directory: {output_dir}")
     print("=" * 80 + "\n")
 
-    # Run training for each region
     regional_dirs = {}
     start_time_total = datetime.now()
 
@@ -627,7 +588,6 @@ def main():
             if anp_dir is None:
                 print(f"WARNING: ANP training failed for {region_info['name']}")
 
-        # Run baselines
         if not args.skip_baselines:
             baseline_output = output_dir / region_key / 'baselines'
             baseline_dir, duration = run_harness_for_region(
@@ -641,14 +601,12 @@ def main():
     end_time_total = datetime.now()
     total_duration = (end_time_total - start_time_total).total_seconds()
 
-    # Collect and aggregate results
     print("\n" + "=" * 80)
     print("COLLECTING AND AGGREGATING RESULTS")
     print("=" * 80)
 
     anp_df, baseline_df = collect_regional_results(regional_dirs, REGIONS)
 
-    # Save aggregated results
     if not anp_df.empty:
         anp_df.to_csv(output_dir / 'anp_regional_results.csv', index=False)
         print(f"Saved ANP results to: {output_dir / 'anp_regional_results.csv'}")
@@ -657,21 +615,18 @@ def main():
         baseline_df.to_csv(output_dir / 'baseline_regional_results.csv', index=False)
         print(f"Saved baseline results to: {output_dir / 'baseline_regional_results.csv'}")
 
-    # Create visualizations
     print("\n" + "=" * 80)
     print("GENERATING REGIONAL COMPARISON PLOTS")
     print("=" * 80)
 
     create_regional_comparison_plots(anp_df, baseline_df, output_dir)
 
-    # Write summary report
     print("\n" + "=" * 80)
     print("GENERATING SUMMARY REPORT")
     print("=" * 80)
 
     write_regional_summary(anp_df, baseline_df, output_dir, args, total_duration)
 
-    # Print final summary
     print("\n" + "=" * 80)
     print("REGIONAL TRAINING COMPLETE")
     print("=" * 80)
@@ -700,9 +655,8 @@ def main():
             print(f"    - baselines/")
     print("=" * 80 + "\n")
 
-    # Print key results
     if not anp_df.empty or not baseline_df.empty:
-        print("KEY RESULTS:")
+        print("RESULTS:")
         print("-" * 80)
 
         if not anp_df.empty:
@@ -710,7 +664,6 @@ def main():
             print(anp_df[['region', 'test_log_r2_mean', 'test_log_r2_std',
                           'test_linear_rmse_mean', 'test_linear_rmse_std']].to_string(index=False))
 
-            # Print calibration metrics if available
             calib_cols = [col for col in anp_df.columns if any(x in col for x in ['z_mean', 'z_std', 'coverage_1sigma'])]
             if calib_cols:
                 display_calib_cols = ['region'] + [col for col in calib_cols if 'test' in col]

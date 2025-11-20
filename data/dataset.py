@@ -1,7 +1,3 @@
-"""
-PyTorch Dataset for Neural Process training with GEDI + GeoTessera embeddings.
-"""
-
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -19,7 +15,6 @@ class GEDINeuralProcessDataset(Dataset):
     Each sample is a tile with multiple GEDI shots. The dataset creates
     context/target splits for Neural Process training.
     """
-
     def __init__(
         self,
         data_df: pd.DataFrame,
@@ -102,7 +97,7 @@ class GEDINeuralProcessDataset(Dataset):
         Returns:
             Normalized coordinates (N, 2)
         """
-        # Use global bounds for normalization
+        # global bounds for normalization
         global_bounds = (self.lon_min, self.lat_min, self.lon_max, self.lat_max)
         return normalize_coords(coords, global_bounds)
 
@@ -175,7 +170,7 @@ def collate_neural_process(batch):
     Returns:
         Batched dict with lists of tensors (one per tile in batch)
     """
-    # Since tiles can have different numbers of shots, we return lists
+    # Since tiles can have different numbers of shots, return lists
     return {
         'context_coords': [item['context_coords'] for item in batch],
         'context_embeddings': [item['context_embeddings'] for item in batch],
@@ -187,12 +182,6 @@ def collate_neural_process(batch):
 
 
 class GEDIInferenceDataset(Dataset):
-    """
-    Dataset for inference on a dense grid.
-
-    Used for predicting AGBD at arbitrary locations within a tile.
-    """
-
     def __init__(
         self,
         context_df: pd.DataFrame,
@@ -230,9 +219,9 @@ class GEDIInferenceDataset(Dataset):
         self.agbd_scale = agbd_scale
         self.log_transform_agbd = log_transform_agbd
 
-        # Store global bounds for normalization
+        # global bounds for normalization
         if global_bounds is None:
-            # Compute from context + query data
+            # from context + query data
             all_lons = np.concatenate([context_df['longitude'].values, query_lons])
             all_lats = np.concatenate([context_df['latitude'].values, query_lats])
             self.lon_min = all_lons.min()
@@ -240,10 +229,8 @@ class GEDIInferenceDataset(Dataset):
             self.lat_min = all_lats.min()
             self.lat_max = all_lats.max()
         else:
-            # Use provided global bounds
             self.lon_min, self.lat_min, self.lon_max, self.lat_max = global_bounds
 
-        # Prepare context data
         self.context_coords = self.context_df[['longitude', 'latitude']].values
         self.context_embeddings = np.stack(self.context_df['embedding_patch'].values)
         self.context_agbd = self.context_df['agbd'].values[:, None]
@@ -259,13 +246,11 @@ class GEDIInferenceDataset(Dataset):
         return len(self.query_lons)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get query point with context."""
         query_coord = np.array([[self.query_lons[idx], self.query_lats[idx]]])
         query_embedding = self.query_embeddings[idx:idx+1]
 
         # Normalize if needed
         if self.normalize_coords:
-            # Use global bounds for normalization
             lon_range = self.lon_max - self.lon_min if self.lon_max > self.lon_min else 1.0
             lat_range = self.lat_max - self.lat_min if self.lat_max > self.lat_min else 1.0
 

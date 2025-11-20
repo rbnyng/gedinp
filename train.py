@@ -21,7 +21,7 @@ from models.neural_process import (
 from diagnostics import generate_all_diagnostics
 from utils.evaluation import compute_metrics
 from utils.config import save_config, _make_serializable
-
+from utils.evaluation import evaluate_model
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train GEDI Neural Process')
@@ -201,26 +201,12 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
 
 
 def validate(model, dataloader, device, kl_weight=1.0, agbd_scale=200.0, log_transform_agbd=True, denormalize_for_reporting=False):
-    """
-    Validate model using the shared evaluate_model utility.
-
-    This ensures consistent metric computation (global, not per-tile averaged)
-    across training validation and final evaluation.
-
-    Args:
-        denormalize_for_reporting: If False (default), compute metrics in log space
-            for model selection during training. If True, denormalize to linear space
-            for final test reporting and comparison with baselines.
-    """
-    from utils.evaluation import evaluate_model
-
-    # Use evaluate_model with loss computation enabled
     _, _, _, metrics, loss_dict = evaluate_model(
         model=model,
         dataloader=dataloader,
         device=device,
-        max_context_shots=100000,  # Very high limit to avoid subsampling
-        max_targets_per_chunk=10000,  # Large chunks for training validation
+        max_context_shots=100000,  # very high limit to avoid subsampling
+        max_targets_per_chunk=10000,  # large chunks for training validation
         compute_loss=True,
         kl_weight=kl_weight,
         agbd_scale=agbd_scale,
@@ -255,14 +241,13 @@ def main():
         tile_size=0.1,
         start_time=args.start_time,
         end_time=args.end_time,
-        max_agbd=500.0  # Cap at 500 Mg/ha to remove unrealistic outliers (e.g., 3000+)
+        max_agbd=500.0  # cap at 500 to remove unrealistic outliers
     )
     print(f"Retrieved {len(gedi_df)} GEDI shots across {gedi_df['tile_id'].nunique()} tiles")
 
     if args.train_years is not None:
         print(f"\nApplying temporal filtering: using only years {args.train_years} for training")
 
-        # Extract year from timestamp if available
         if 'time' in gedi_df.columns:
             gedi_df['year'] = pd.to_datetime(gedi_df['time']).dt.year
         elif 'date_time' in gedi_df.columns:
@@ -270,7 +255,6 @@ def main():
         elif 'datetime' in gedi_df.columns:
             gedi_df['year'] = pd.to_datetime(gedi_df['datetime']).dt.year
         else:
-            # Try to infer from index if it's a datetime
             try:
                 gedi_df['year'] = pd.to_datetime(gedi_df.index).year
             except:
@@ -321,11 +305,8 @@ def main():
     train_df, val_df, test_df = splitter.split()
     print()
 
-    # Save splits as Parquet to preserve embedding vectors
-    # Flatten embeddings to 1D arrays to avoid nested structure issues
     def prepare_for_parquet(df):
         df_copy = df.copy()
-        # Flatten (H, W, C) embeddings to 1D for Parquet storage
         df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(
             lambda x: x.flatten().tolist() if x is not None else None
         )
@@ -337,9 +318,6 @@ def main():
 
     print(f"Saved splits to Parquet files with flattened embeddings")
 
-    # Compute global coordinate bounds from training data
-    # This ensures consistent normalization across train/val/test sets
-    # and allows the model to learn latitude-dependent patterns
     global_bounds = (
         train_df['longitude'].min(),
         train_df['latitude'].min(),
@@ -349,7 +327,6 @@ def main():
     print(f"Global bounds: lon [{global_bounds[0]:.4f}, {global_bounds[2]:.4f}], "
           f"lat [{global_bounds[1]:.4f}, {global_bounds[3]:.4f}]")
 
-    # Save global bounds and temporal info to config for future evaluation
     config = vars(args)
     config['global_bounds'] = list(global_bounds)
     if args.train_years is not None:
@@ -449,7 +426,7 @@ def main():
         print(f"\nEpoch {epoch}/{args.epochs}")
         print("-" * 80)
 
-        # Compute KL weight with warmup (linear from 0 to max)
+        # KL weight with warmup (linear from 0 to max)
         if args.kl_warmup_epochs > 0:
             kl_weight = min(1.0, epoch / args.kl_warmup_epochs) * args.kl_weight_max
         else:
@@ -458,12 +435,11 @@ def main():
         train_metrics = train_epoch(model, train_loader, optimizer, args.device, kl_weight)
         train_losses.append(train_metrics['loss'])
 
-        # Validate (metrics computed in both log and linear space)
         val_losses_dict, val_metrics = validate(
             model, val_loader, args.device, kl_weight,
             agbd_scale=args.agbd_scale,
             log_transform_agbd=args.log_transform_agbd,
-            denormalize_for_reporting=False  # Parameter deprecated but kept for compatibility
+            denormalize_for_reporting=False
         )
         val_losses.append(val_losses_dict['loss'])
 
@@ -481,7 +457,6 @@ def main():
 
         scheduler.step(val_losses_dict['loss'])
 
-        # Save best model based on validation loss
         if val_losses_dict['loss'] < best_val_loss:
             best_val_loss = val_losses_dict['loss']
             epochs_without_improvement = 0
@@ -492,11 +467,10 @@ def main():
                 'val_loss': val_losses_dict['loss'],
                 'val_metrics': val_metrics
             }, output_dir / 'best_model.pt')
-            print("✓ Saved best model (lowest val loss)")
+            print("Saved best model (lowest val loss)")
         else:
             epochs_without_improvement += 1
 
-        # Save best model based on R² (in log space, aligned with training objective)
         current_r2 = val_metrics.get('log_r2', float('-inf')) if val_metrics else float('-inf')
         if current_r2 > best_r2:
             best_r2 = current_r2
@@ -508,7 +482,7 @@ def main():
                 'val_metrics': val_metrics,
                 'r2': current_r2
             }, output_dir / 'best_r2_model.pt')
-            print(f"✓ Saved best R² model (log-space R² = {best_r2:.4f})")
+            print(f"Saved best R² model (log-space R² = {best_r2:.4f})")
 
         if epochs_without_improvement >= args.early_stopping_patience:
             print(f"\nEarly stopping triggered after {epoch} epochs")
@@ -522,7 +496,6 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
             }, output_dir / f'checkpoint_epoch_{epoch}.pt')
 
-    # Calculate training time
     training_time = time() - training_start_time
 
     history = {
@@ -540,7 +513,6 @@ def main():
     print(f"Models saved to: {output_dir}")
     print("=" * 80)
 
-    # Evaluate on test set (metrics in both log and linear space)
     print("\nEvaluating on test set...")
     checkpoint = torch.load(output_dir / 'best_r2_model.pt', map_location=args.device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -548,7 +520,7 @@ def main():
         model, test_loader, args.device, kl_weight=1.0,
         agbd_scale=args.agbd_scale,
         log_transform_agbd=args.log_transform_agbd,
-        denormalize_for_reporting=False  # Parameter deprecated but kept for compatibility
+        denormalize_for_reporting=False
     )
 
     print(f"Test Loss:        {test_losses_dict['loss']:.6e}")
@@ -561,12 +533,10 @@ def main():
         print(f"  Test RMSE:      {test_metrics.get('linear_rmse', 0):.2f} Mg/ha")
         print(f"  Test MAE:       {test_metrics.get('linear_mae', 0):.2f} Mg/ha")
 
-    # Update best model checkpoint with test metrics
     checkpoint['test_metrics'] = test_metrics
     torch.save(checkpoint, output_dir / 'best_r2_model.pt')
-    print("✓ Added test metrics to best model checkpoint")
+    print("Added test metrics to best model checkpoint")
 
-    # Save results.json for consistency with baseline runs
     results = {
         'neural_process': {
             'train_time': training_time,
@@ -576,7 +546,7 @@ def main():
     }
     with open(output_dir / 'results.json', 'w') as f:
         json.dump(_make_serializable(results), f, indent=2)
-    print("✓ Saved results to results.json")
+    print("Saved results to results.json")
 
     if args.generate_diagnostics:
         print("\nGenerating post-training diagnostics...")

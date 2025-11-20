@@ -1,9 +1,3 @@
-"""
-GEDI data querying utilities using gediDB.
-
-Handles querying GEDI L4A data for aboveground biomass (AGBD) with spatial filtering.
-"""
-
 import gedidb as gdb
 import pandas as pd
 import xarray as xr
@@ -22,8 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 class GEDIQuerier:
-    """Query GEDI data from gediDB."""
-
     def __init__(
         self,
         storage_type: str = 's3',
@@ -34,36 +26,19 @@ class GEDIQuerier:
         max_workers: int = 8,
         cache_dir: Optional[str] = None
     ):
-        """
-        Initialize GEDI data provider.
-
-        Args:
-            storage_type: 's3' for cloud access or 'local' for local database
-            s3_bucket: S3 bucket name for cloud access
-            url: S3 endpoint URL
-            local_path: Path to local gediDB if storage_type='local'
-            memory_budget_mb: TileDB memory budget in MB (default: 512)
-            max_workers: Maximum number of parallel workers for tile/chunk queries (default: 8)
-            cache_dir: Optional directory to cache query results (default: None, no caching)
-        """
         # Configure TileDB memory limits to prevent huge allocations
         memory_budget_bytes = memory_budget_mb * 1024 * 1024
         config = tiledb.Config()
         config["sm.memory_budget"] = str(memory_budget_bytes)
         config["sm.memory_budget_var"] = str(memory_budget_bytes * 2)
-        # Reduce tile cache size
         config["sm.tile_cache_size"] = str(memory_budget_bytes // 2)
-        # Limit concurrent operations
         config["sm.compute_concurrency_level"] = "1"
         config["sm.io_concurrency_level"] = "1"
-        # Enable memory management features
         config["sm.enable_signal_handlers"] = "false"
 
         logger.info(f"TileDB memory budget set to {memory_budget_mb} MB")
 
-        # Set TileDB default configuration
         try:
-            # Set default context with config
             tiledb.default_ctx(config=config)
         except Exception as e:
             logger.warning(f"Could not set TileDB default context: {e}")
@@ -117,7 +92,7 @@ class GEDIQuerier:
         Returns:
             Hash string for cache lookup
         """
-        # Create a deterministic representation of query parameters
+        # deterministic representation of query parameters
         cache_params = {
             'bbox': [round(x, 6) for x in bbox],  # Round to ~10cm precision
             'start_time': start_time,
@@ -128,7 +103,6 @@ class GEDIQuerier:
             'max_agbd': round(max_agbd, 2) if max_agbd is not None else None
         }
 
-        # Convert to JSON string and hash
         params_str = json.dumps(cache_params, sort_keys=True)
         hash_obj = hashlib.md5(params_str.encode())
         return hash_obj.hexdigest()
@@ -162,10 +136,9 @@ class GEDIQuerier:
         """
         if variables is None:
             variables = [
-                "agbd",  # Aboveground biomass density
+                "agbd",
             ]
 
-        # Check cache if enabled
         if self.cache_dir:
             cache_key = self._generate_cache_key(
                 bbox, start_time, end_time, variables,
@@ -186,13 +159,11 @@ class GEDIQuerier:
         logger.info(f"Time range: {start_time} to {end_time}")
         logger.info(f"Variables: {variables}")
 
-        # Create bbox geometry as GeoDataFrame (required by gediDB)
         bbox_geom = box(*bbox)
         roi = gpd.GeoDataFrame([1], geometry=[bbox_geom], crs="EPSG:4326")
 
         try:
-            # Query data with memory-efficient settings
-            return_type = 'xarray'  # Use xarray for better memory management
+            return_type = 'xarray'
 
             gedi_data = self.provider.get_data(
                 variables=variables,
@@ -205,16 +176,14 @@ class GEDIQuerier:
 
             logger.info(f"Query successful, converting to DataFrame...")
 
-            # Convert to DataFrame
             if hasattr(gedi_data, 'to_dataframe'):
                 df = gedi_data.to_dataframe().reset_index()
             else:
-                # Fallback if not xarray
                 df = pd.DataFrame(gedi_data)
 
             logger.info(f"Retrieved {len(df)} shots before filtering")
 
-            # Handle empty results gracefully
+            # Handle empty results
             if len(df) == 0:
                 logger.info("No data found, returning empty DataFrame")
                 return pd.DataFrame()
@@ -229,7 +198,6 @@ class GEDIQuerier:
                 df = df.dropna(subset=['latitude', 'longitude', 'agbd'])
             else:
                 logger.warning("'agbd' column not found in results")
-                # Remove NaN values from coordinates at minimum
                 df = df.dropna(subset=['latitude', 'longitude'])
 
             logger.info(f"Returning {len(df)} shots after filtering")
@@ -251,10 +219,8 @@ class GEDIQuerier:
 
         except MemoryError as e:
             logger.error(f"MemoryError during query: {e}")
-            # Don't raise immediately - let caller handle it
             raise
         except Exception as e:
-            # Check if it's a TileDB memory error (even if not caught as MemoryError)
             if "MemoryError" in str(e) or "Unable to allocate" in str(e):
                 logger.error(f"TileDB memory allocation error: {e}")
                 raise MemoryError(str(e))
@@ -304,7 +270,6 @@ class GEDIQuerier:
         all_data = []
 
         def query_single_chunk(chunk_info):
-            """Helper function to query a single chunk."""
             chunk_idx, chunk_bbox = chunk_info
             try:
                 chunk_df = self.query_bbox(chunk_bbox, **kwargs)
@@ -312,15 +277,12 @@ class GEDIQuerier:
             except Exception as e:
                 return chunk_idx, None, e
 
-        # Execute queries in parallel
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all chunk queries
             futures = {
                 executor.submit(query_single_chunk, (idx, bbox)): idx
                 for idx, bbox in enumerate(chunk_bboxes)
             }
 
-            # Process results as they complete
             for future in as_completed(futures):
                 chunk_idx, chunk_df, error = future.result()
                 chunk_bbox = chunk_bboxes[chunk_idx]
@@ -347,7 +309,6 @@ class GEDIQuerier:
         if 'shot_number' in combined_df.columns:
             combined_df = combined_df.drop_duplicates(subset=['shot_number'])
         else:
-            # Fallback: drop duplicates based on coordinates
             combined_df = combined_df.drop_duplicates(subset=['latitude', 'longitude'])
 
         logger.info(f"Total shots after merging chunks: {len(combined_df)}")
@@ -411,7 +372,7 @@ class GEDIQuerier:
         """
         min_lon, min_lat, max_lon, max_lat = region_bbox
 
-        # Generate tile centers
+        # tile centers
         lon_centers = np.arange(
             min_lon + tile_size/2,
             max_lon,
@@ -423,7 +384,7 @@ class GEDIQuerier:
             tile_size
         )
 
-        # Build list of tile centers
+        # list of tile centers
         tile_centers = []
         for lon_center in lon_centers:
             for lat_center in lat_centers:
@@ -435,7 +396,6 @@ class GEDIQuerier:
         all_shots = []
 
         def query_single_tile(tile_info):
-            """Helper function to query a single tile."""
             tile_idx, (lon_center, lat_center) = tile_info
             try:
                 tile_df = self.query_tile(lon_center, lat_center, tile_size, **kwargs)
@@ -449,15 +409,13 @@ class GEDIQuerier:
             except Exception as e:
                 return tile_idx, None, e
 
-        # Execute queries in parallel
+        # queries in parallel
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all tile queries
             futures = {
                 executor.submit(query_single_tile, (idx, center)): idx
                 for idx, center in enumerate(tile_centers)
             }
 
-            # Process results as they complete
             for future in as_completed(futures):
                 tile_idx, tile_df, error = future.result()
                 lon_center, lat_center = tile_centers[tile_idx]
@@ -479,15 +437,6 @@ class GEDIQuerier:
 
 
 def get_gedi_statistics(df: pd.DataFrame) -> dict:
-    """
-    Compute summary statistics for GEDI data.
-
-    Args:
-        df: DataFrame from GEDIQuerier
-
-    Returns:
-        Dictionary of statistics
-    """
     stats = {
         'n_shots': len(df),
         'agbd_mean': df['agbd'].mean(),

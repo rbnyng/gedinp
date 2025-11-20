@@ -1,9 +1,3 @@
-"""
-GeoTessera embedding extraction utilities.
-
-Handles extraction of foundation model embeddings at GEDI shot locations.
-"""
-
 import numpy as np
 from geotessera import GeoTessera
 from typing import Optional, Tuple, Dict
@@ -12,8 +6,6 @@ from pyproj import Transformer
 
 
 class EmbeddingExtractor:
-    """Extract GeoTessera embeddings at GEDI shot locations."""
-
     def __init__(
         self,
         year: int = 2024,
@@ -37,7 +29,7 @@ class EmbeddingExtractor:
         self.year = year
         self.patch_size = patch_size
 
-        # Keep in-memory cache for performance (avoids re-reading from disk)
+        # in-memory cache for performance (avoids re-reading from disk)
         self.tile_cache: Dict[Tuple[float, float], Tuple[np.ndarray, object, object]] = {}
 
         # Cache for coordinate transformers to avoid repeated creation

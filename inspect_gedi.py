@@ -4,18 +4,15 @@ from shapely.geometry import box
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Connect to GEDI database
 provider = gdb.GEDIProvider(
     storage_type='s3',
     s3_bucket="dog.gedidb.gedi-l2-l4-v002",
     url="https://s3.gfz-potsdam.de"
 )
 
-# Define a region of interest (small area in Zambia)
 roi_geom = box(-73, 2, -72, 3)
 roi = gpd.GeoDataFrame({'geometry': [roi_geom]}, crs="EPSG:4326")
 
-# Query biomass data
 gedi_data = provider.get_data(
     variables=["agbd"],
     query_type="bounding_box",
@@ -28,18 +25,15 @@ gedi_data = provider.get_data(
 print(f"Retrieved {len(gedi_data.shot_number)} GEDI shots")
 print(f"Variables: {list(gedi_data.data_vars)}")
 
-# Extract data and handle NaNs
 agbd = gedi_data['agbd'].values
 lat = gedi_data['latitude'].values
 lon = gedi_data['longitude'].values
 
-# Mask NaNs
 mask = ~np.isnan(agbd)
 agbd = agbd[mask]
 lat = lat[mask]
 lon = lon[mask]
 
-# Create scatter plot
 fig, ax = plt.subplots(figsize=(10, 8))
 scatter = ax.scatter(lon, lat, c=agbd, cmap='YlGn', s=1, vmin=0, vmax=200)
 ax.set_xlabel('Longitude')
@@ -48,16 +42,14 @@ ax.set_title('GEDI Aboveground Biomass Density (Mg/ha)')
 plt.colorbar(scatter, ax=ax, label='AGBD (Mg/ha)')
 plt.tight_layout()
 
-# Save figure
 fig.savefig("gedi_agbd_plot.png", dpi=300)
 print("Figure saved as 'gedi_agbd_plot.png'")
 
-# Summary statistics
+# statistics
 print(f"Mean biomass: {agbd.mean():.2f} Mg/ha")
 print(f"Median biomass: {np.median(agbd):.2f} Mg/ha")
 print(f"Max biomass: {agbd.max():.2f} Mg/ha")
 
-# Percentiles
 percentiles = [10, 25, 50, 75, 90, 95, 99]
 agbd_percentiles = np.percentile(agbd, percentiles)
 for p, value in zip(percentiles, agbd_percentiles):

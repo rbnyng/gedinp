@@ -109,16 +109,14 @@ def parse_args():
 
 def prepare_data(df, log_transform=True, agbd_scale=200.0, patch_size=3, embedding_dim=128):
     coords = df[['longitude', 'latitude']].values
-    # Convert lists back to numpy arrays if loaded from Parquet
-    # Parquet saves flattened embeddings, so reshape them back to (H, W, C)
+    # lists back to numpy arrays if loaded from parquet
+    # parquet saves flattened embeddings, so reshape them back to (H, W, C)
     embeddings_list = df['embedding_patch'].values
     embeddings = []
     for x in embeddings_list:
         if isinstance(x, list):
-            # Flattened embedding from Parquet - reshape it
             arr = np.array(x, dtype=np.float32).reshape(patch_size, patch_size, embedding_dim)
         else:
-            # Already a numpy array
             arr = x if x.shape == (patch_size, patch_size, embedding_dim) else x.reshape(patch_size, patch_size, embedding_dim)
         embeddings.append(arr)
     embeddings = np.stack(embeddings)
@@ -130,30 +128,11 @@ def prepare_data(df, log_transform=True, agbd_scale=200.0, patch_size=3, embeddi
 
 
 def compute_calibration_metrics(predictions, targets, stds):
-    """
-    Compute calibration metrics for uncertainty quantification.
-
-    Args:
-        predictions: (N,) array of predictions (in normalized log space)
-        targets: (N,) array of ground truth (in normalized log space)
-        stds: (N,) array of predicted standard deviations
-
-    Returns:
-        dict with calibration metrics:
-            - z_mean: mean of z-scores (ideal: 0)
-            - z_std: std of z-scores (ideal: 1)
-            - coverage_1sigma: empirical coverage at 1σ (ideal: 68.3%)
-            - coverage_2sigma: empirical coverage at 2σ (ideal: 95.4%)
-            - coverage_3sigma: empirical coverage at 3σ (ideal: 99.7%)
-    """
-    # Compute z-scores (standardized residuals)
     z_scores = (targets - predictions) / (stds + 1e-8)
 
-    # Z-score statistics
     z_mean = np.mean(z_scores)
     z_std = np.std(z_scores)
 
-    # Compute empirical coverage at key confidence levels
     abs_z = np.abs(z_scores)
     coverage_1sigma = np.sum(abs_z <= 1.0) / len(z_scores) * 100
     coverage_2sigma = np.sum(abs_z <= 2.0) / len(z_scores) * 100
@@ -169,13 +148,6 @@ def compute_calibration_metrics(predictions, targets, stds):
 
 
 def print_calibration_metrics(metrics, prefix=""):
-    """
-    Pretty print calibration metrics.
-
-    Args:
-        metrics: Dict with calibration metrics
-        prefix: Optional prefix for print statements (e.g., "Validation", "Test")
-    """
     if prefix:
         prefix = f"{prefix} - "
 
@@ -187,41 +159,18 @@ def print_calibration_metrics(metrics, prefix=""):
 
 
 def evaluate_model(model, coords, embeddings, agbd_true, agbd_scale=200.0, log_transform=True):
-    """
-    Evaluate baseline model and compute metrics in both log and linear space.
-
-    Args:
-        model: Baseline model (RF, XGBoost, or IDW)
-        coords: Coordinates for prediction
-        embeddings: Embeddings for prediction
-        agbd_true: True AGBD values in linear space (Mg/ha)
-        agbd_scale: AGBD scale factor (default: 200.0)
-        log_transform: Whether log transform was used (default: True)
-
-    Returns:
-        metrics: Dict with log_rmse, log_mae, log_r2, linear_rmse, linear_mae, and calibration metrics
-        pred: Predictions in linear space (Mg/ha)
-        pred_std_norm: Predicted std in normalized space
-    """
-    # Predict (normalized, in log space)
     pred_norm, pred_std_norm = model.predict(coords, embeddings, return_std=True)
 
-    # Normalize true values to log space for log-space metrics
     agbd_true_norm = normalize_agbd(agbd_true, agbd_scale=agbd_scale, log_transform=log_transform)
 
-    # Compute log-space metrics
     log_metrics = compute_metrics(pred_norm, agbd_true_norm)
 
-    # Denormalize predictions to linear space
     pred = denormalize_agbd(pred_norm, agbd_scale=agbd_scale, log_transform=log_transform)
 
-    # Compute linear-space metrics
     linear_metrics = compute_metrics(pred, agbd_true)
 
-    # Compute calibration metrics (in normalized log space where model predicts)
     calibration_metrics = compute_calibration_metrics(pred_norm, agbd_true_norm, pred_std_norm)
 
-    # Combine metrics
     metrics = {
         'log_rmse': log_metrics['rmse'],
         'log_mae': log_metrics['mae'],
@@ -403,11 +352,10 @@ def main():
     train_df, val_df, test_df = splitter.split()
     print()
 
-    # Save splits as Parquet to preserve embedding vectors
-    # Flatten embeddings to 1D arrays to avoid nested structure issues
+    # save splits as parquet to preserve embedding vectors
+    # flatten embeddings to 1D arrays to avoid nested structure issues
     def prepare_for_parquet(df):
         df_copy = df.copy()
-        # Flatten (H, W, C) embeddings to 1D for Parquet storage
         df_copy['embedding_patch'] = df_copy['embedding_patch'].apply(
             lambda x: x.flatten().tolist() if x is not None else None
         )
