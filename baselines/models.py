@@ -56,9 +56,6 @@ class RandomForestBaseline:
             random_state=random_state
         )
 
-        # Temperature scaling for uncertainty calibration
-        self.temperature = 1.0
-
     def _prepare_features(
         self,
         coords: np.ndarray,
@@ -188,9 +185,6 @@ class XGBoostBaseline:
         # Quantile models for uncertainty (upper and lower bounds)
         self.model_upper = None
         self.model_lower = None
-
-        # Temperature scaling for uncertainty calibration
-        self.temperature = 1.0
 
     def _prepare_features(
         self,
