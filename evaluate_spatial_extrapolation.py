@@ -209,20 +209,36 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Loaded {len(models)} XGBoost model seeds for {region}")
         return models
 
-    def load_test_data(self, region: str) -> Optional[DataLoader]:
+    def load_test_data(self, region: str, seed_id: Optional[str] = None) -> Optional[DataLoader]:
+        """Load test data for a specific region and seed.
+
+        Args:
+            region: The region to load test data for
+            seed_id: The seed ID to load test data for. If None, loads from first seed or root.
+
+        Returns:
+            DataLoader for the test data
+        """
         region_dir = self.results_dir / region / 'anp'
 
         if not region_dir.exists():
             logger.warning(f"Region directory not found: {region_dir}")
             return None
 
-        seed_dirs = list(region_dir.glob('seed_*'))
-        if seed_dirs:
-            test_split_path = seed_dirs[0] / 'test_split.parquet'
-            config_path = seed_dirs[0] / 'config.json'
+        # Determine path based on seed_id
+        if seed_id is not None and seed_id != 'default':
+            # Load test split for specific seed
+            test_split_path = region_dir / seed_id / 'test_split.parquet'
+            config_path = region_dir / seed_id / 'config.json'
         else:
-            test_split_path = region_dir / 'test_split.parquet'
-            config_path = region_dir / 'config.json'
+            # Fallback: load from first seed or root directory
+            seed_dirs = list(region_dir.glob('seed_*'))
+            if seed_dirs:
+                test_split_path = seed_dirs[0] / 'test_split.parquet'
+                config_path = seed_dirs[0] / 'config.json'
+            else:
+                test_split_path = region_dir / 'test_split.parquet'
+                config_path = region_dir / 'config.json'
 
         if not test_split_path.exists():
             logger.warning(f"Test split not found: {test_split_path}")
@@ -265,7 +281,8 @@ class SpatialExtrapolationEvaluator:
             num_workers=4
         )
 
-        logger.info(f"Loaded test data for {region}: {len(dataset)} tiles")
+        seed_info = f" (seed: {seed_id})" if seed_id else ""
+        logger.info(f"Loaded test data for {region}{seed_info}: {len(dataset)} tiles")
         return dataloader
 
     def evaluate_anp_on_region(
@@ -419,13 +436,6 @@ class SpatialExtrapolationEvaluator:
                 if model_data is not None:
                     models[region] = model_data  # List of (model, config, seed_id) tuples
 
-            # Load test data
-            test_loaders = {}
-            for region in REGION_ORDER:
-                loader = self.load_test_data(region)
-                if loader is not None:
-                    test_loaders[region] = loader
-
             # Evaluate: train_region x test_region x seed
             for train_region in REGION_ORDER:
                 if train_region not in models:
@@ -435,15 +445,15 @@ class SpatialExtrapolationEvaluator:
                 model_seeds = models[train_region]  # List of (model, config, seed_id)
 
                 for test_region in REGION_ORDER:
-                    if test_region not in test_loaders:
-                        logger.warning(f"Skipping {test_region} (test data not found)")
-                        continue
-
-                    test_loader = test_loaders[test_region]
-
                     # Evaluate each seed
                     seed_results = []
                     for model, config, seed_id in model_seeds:
+                        # Load test data for this specific seed in test_region
+                        test_loader = self.load_test_data(test_region, seed_id=seed_id)
+                        if test_loader is None:
+                            logger.warning(f"Skipping {test_region} seed {seed_id} (test data not found)")
+                            continue
+
                         if model_type == 'anp':
                             result = self.evaluate_anp_on_region(
                                 model, test_loader, train_region, test_region
