@@ -435,15 +435,18 @@ class SpatialExtrapolationEvaluator:
             n_batches = 0
 
             for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.few_shot_epochs}", leave=False):
-                for i in range(len(batch['context_coords'])):
+                optimizer.zero_grad()
+                batch_loss = 0.0
+                n_tiles = len(batch['context_coords'])
+
+                # Accumulate loss across all tiles in the batch
+                for i in range(n_tiles):
                     context_coords = batch['context_coords'][i].to(self.device)
                     context_embeddings = batch['context_embeddings'][i].to(self.device)
                     context_agbd = batch['context_agbd'][i].to(self.device)
                     target_coords = batch['target_coords'][i].to(self.device)
                     target_embeddings = batch['target_embeddings'][i].to(self.device)
                     target_agbd = batch['target_agbd'][i].to(self.device)
-
-                    optimizer.zero_grad()
 
                     pred_mean, pred_log_var, kl_loss, _ = fine_tuned_model(
                         context_coords,
@@ -454,20 +457,24 @@ class SpatialExtrapolationEvaluator:
                         training=True
                     )
 
-                    # Reconstruction loss (MSE)
-                    recon_loss = torch.nn.functional.mse_loss(pred_mean, target_agbd)
+                    # Reconstruction loss (MSE) - ensure it's reduced to scalar
+                    recon_loss = torch.nn.functional.mse_loss(pred_mean, target_agbd, reduction='mean')
 
                     # Total loss (reconstruction + KL divergence for probabilistic models)
                     if kl_loss is not None:
-                        loss = recon_loss + 0.01 * kl_loss  # Small weight on KL
+                        tile_loss = recon_loss + 0.01 * kl_loss  # Small weight on KL
                     else:
-                        loss = recon_loss
+                        tile_loss = recon_loss
 
-                    loss.backward()
-                    optimizer.step()
+                    # Accumulate loss across tiles (average over tiles in batch)
+                    batch_loss = batch_loss + tile_loss / n_tiles
 
-                    epoch_loss += loss.item()
-                    n_batches += 1
+                # Backprop and update once per batch
+                batch_loss.backward()
+                optimizer.step()
+
+                epoch_loss += batch_loss.item()
+                n_batches += 1
 
             avg_loss = epoch_loss / n_batches if n_batches > 0 else 0.0
             logger.info(f"  Epoch {epoch+1}: avg_loss = {avg_loss:.4f}")
