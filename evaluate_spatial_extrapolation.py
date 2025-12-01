@@ -827,13 +827,15 @@ class SpatialExtrapolationEvaluator:
         reverse_cmap: bool = False,
         ax: Optional[plt.Axes] = None,
         show_std: bool = True,
-        center: Optional[float] = None
+        center: Optional[float] = None,
+        simple_title: bool = False
     ) -> plt.Axes:
         """Create heatmap using aggregated (mean) results across seeds.
 
         Args:
             show_std: If True and std data is available, annotate cells with mean ± std
             center: If provided, centers the colormap at this value (useful for diverging colormaps)
+            simple_title: If True, only show model type (e.g., "ANP" instead of "ANP: metric_name")
         """
         # Filter for aggregated results (seed_id == 'mean')
         df_model = df[df['model_type'] == model_type]
@@ -916,7 +918,19 @@ class SpatialExtrapolationEvaluator:
 
         ax.set_xlabel('Test Region', fontsize=12)
         ax.set_ylabel('Train Region', fontsize=12)
-        title = f'{model_type.upper()}: {metric_name}'
+
+        # Create title based on simple_title flag
+        if simple_title:
+            # Just show model type (e.g., "ANP" or "XGBoost")
+            title = model_type.upper() if model_type != 'xgboost' else 'XGBoost'
+        elif metric_name in ['Zero-Shot', 'Few-Shot']:
+            # For comparison plots, just show model type
+            title = model_type.upper() if model_type != 'xgboost' else 'XGBoost'
+        else:
+            # Show full title
+            model_label = model_type.upper() if model_type != 'xgboost' else 'XGBoost'
+            title = f'{model_label}: {metric_name}'
+
         if show_std and std_col in df_mean.columns:
             title += ' (Mean ± Std across seeds)'
         ax.set_title(title, fontsize=14, fontweight='bold')
@@ -972,14 +986,14 @@ class SpatialExtrapolationEvaluator:
         self.create_heatmap(
             df, 'anp', metric, metric_name,
             cmap=cmap, vmin=vmin, vmax=vmax, reverse_cmap=reverse_cmap,
-            ax=axes[0], center=center
+            ax=axes[0], center=center, simple_title=True
         )
 
         # XGBoost heatmap
         self.create_heatmap(
             df, 'xgboost', metric, metric_name,
             cmap=cmap, vmin=vmin, vmax=vmax, reverse_cmap=reverse_cmap,
-            ax=axes[1], center=center
+            ax=axes[1], center=center, simple_title=True
         )
 
         plt.suptitle(f'Spatial Extrapolation: {metric_name}', fontsize=16, fontweight='bold', y=0.98)
@@ -1108,20 +1122,20 @@ class SpatialExtrapolationEvaluator:
             df_few = df[df['transfer_type'] == 'few-shot']
 
             # R² comparisons (row 0) - using shared scales
-            self.create_heatmap(df_zero, 'anp', 'log_r2', 'ANP Zero-Shot',
+            self.create_heatmap(df_zero, 'anp', 'log_r2', 'Zero-Shot',
                                cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
-                               ax=axes[0, 0], center=0.0)
-            self.create_heatmap(df_few, 'anp', 'log_r2', 'ANP Few-Shot',
+                               ax=axes[0, 0], center=0.0, simple_title=True)
+            self.create_heatmap(df_few, 'anp', 'log_r2', 'Few-Shot',
                                cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
-                               ax=axes[0, 1], center=0.0)
+                               ax=axes[0, 1], center=0.0, simple_title=True)
 
             # RMSE comparisons (row 1) - using shared scales
-            self.create_heatmap(df_zero, 'anp', 'log_rmse', 'ANP Zero-Shot',
+            self.create_heatmap(df_zero, 'anp', 'log_rmse', 'Zero-Shot',
                                cmap='RdYlGn_r', vmin=shared_rmse_vmin, vmax=shared_rmse_vmax,
-                               ax=axes[1, 0])
-            self.create_heatmap(df_few, 'anp', 'log_rmse', 'ANP Few-Shot',
+                               ax=axes[1, 0], simple_title=True)
+            self.create_heatmap(df_few, 'anp', 'log_rmse', 'Few-Shot',
                                cmap='RdYlGn_r', vmin=shared_rmse_vmin, vmax=shared_rmse_vmax,
-                               ax=axes[1, 1])
+                               ax=axes[1, 1], simple_title=True)
 
             plt.suptitle('Zero-Shot vs Few-Shot Transfer', fontsize=18, fontweight='bold', y=0.995)
             plt.tight_layout(rect=[0, 0, 1, 0.99])
@@ -1143,12 +1157,12 @@ class SpatialExtrapolationEvaluator:
                 else:
                     # Z-score std comparisons (centered at 1 = perfect calibration)
                     # Using shared scales computed above
-                    self.create_heatmap(df_zero_calib, 'anp', 'z_score_std', 'ANP Zero-Shot: Z-Score Std',
+                    self.create_heatmap(df_zero_calib, 'anp', 'z_score_std', 'Zero-Shot',
                                        cmap='RdYlGn', vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
-                                       ax=axes[0], center=1.0)
-                    self.create_heatmap(df_few_calib, 'anp', 'z_score_std', 'ANP Few-Shot: Z-Score Std',
+                                       ax=axes[0], center=1.0, simple_title=True)
+                    self.create_heatmap(df_few_calib, 'anp', 'z_score_std', 'Few-Shot',
                                        cmap='RdYlGn', vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
-                                       ax=axes[1], center=1.0)
+                                       ax=axes[1], center=1.0, simple_title=True)
 
                     plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std, 1.0 = Perfect)',
                                fontsize=18, fontweight='bold', y=0.98)
