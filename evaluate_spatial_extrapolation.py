@@ -932,35 +932,41 @@ class SpatialExtrapolationEvaluator:
         metric_name: str,
         cmap: str = 'RdYlGn',
         reverse_cmap: bool = False,
-        center: Optional[float] = None
+        center: Optional[float] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None
     ) -> plt.Figure:
         """Create comparison heatmap with 1x2 layout (for single metric comparison).
 
         Args:
             center: If provided, centers the colormap at this value (for diverging colormaps)
+            vmin: Optional pre-computed minimum value for colormap scale
+            vmax: Optional pre-computed maximum value for colormap scale
         """
         fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
-        # Filter for mean results to compute shared vmin/vmax
-        if 'seed_id' in df.columns:
-            df_mean = df[df['seed_id'] == 'mean']
-            if len(df_mean) == 0:
+        # Only compute vmin/vmax if not provided
+        if vmin is None or vmax is None:
+            # Filter for mean results to compute shared vmin/vmax
+            if 'seed_id' in df.columns:
+                df_mean = df[df['seed_id'] == 'mean']
+                if len(df_mean) == 0:
+                    df_mean = df
+            else:
                 df_mean = df
-        else:
-            df_mean = df
 
-        if center is not None:
-            # For diverging colormap centered at a value
-            vmax_abs = max(abs(df_mean[metric].min() - center), abs(df_mean[metric].max() - center))
-            vmin = center - vmax_abs
-            vmax = center + vmax_abs
-            # Cap R² at ±1 since it cannot exceed these bounds
-            if metric == 'log_r2':
-                vmin = max(vmin, -1.0)
-                vmax = min(vmax, 1.0)
-        else:
-            vmin = df_mean[metric].min()
-            vmax = df_mean[metric].max()
+            if center is not None:
+                # For diverging colormap centered at a value
+                vmax_abs = max(abs(df_mean[metric].min() - center), abs(df_mean[metric].max() - center))
+                vmin = center - vmax_abs
+                vmax = center + vmax_abs
+                # Cap R² at ±1 since it cannot exceed these bounds
+                if metric == 'log_r2':
+                    vmin = max(vmin, -1.0)
+                    vmax = min(vmax, 1.0)
+            else:
+                vmin = df_mean[metric].min()
+                vmax = df_mean[metric].max()
 
         # ANP heatmap
         self.create_heatmap(
@@ -1063,6 +1069,33 @@ class SpatialExtrapolationEvaluator:
             df = df.copy()
             df['transfer_type'] = 'zero-shot'
 
+        # Get mean results for computing shared scales
+        if 'seed_id' in df.columns:
+            df_mean = df[df['seed_id'] == 'mean']
+            if len(df_mean) == 0:
+                df_mean = df
+        else:
+            df_mean = df
+
+        # Compute shared scales across ALL transfer types (zero-shot and few-shot)
+        # This ensures direct comparability between plots
+
+        # R² scale: centered at 0, symmetric, capped at ±1
+        r2_max_abs = max(abs(df_mean['log_r2'].min()), abs(df_mean['log_r2'].max()))
+        shared_r2_vmin, shared_r2_vmax = max(-r2_max_abs, -1.0), min(r2_max_abs, 1.0)
+
+        # RMSE scale: min to max
+        shared_rmse_vmin = df_mean['log_rmse'].min()
+        shared_rmse_vmax = df_mean['log_rmse'].max()
+
+        # Z-score std scale: centered at 1.0, symmetric (divergent)
+        shared_z_std_vmin, shared_z_std_vmax = None, None
+        if 'z_score_std' in df_mean.columns and df_mean['z_score_std'].notna().any():
+            df_mean_calib = df_mean[df_mean['z_score_std'].notna()]
+            z_std_max_abs = max(abs(df_mean_calib['z_score_std'].min() - 1.0),
+                               abs(df_mean_calib['z_score_std'].max() - 1.0))
+            shared_z_std_vmin, shared_z_std_vmax = 1.0 - z_std_max_abs, 1.0 + z_std_max_abs
+
         # If we have both zero-shot and few-shot, create comparison visualizations
         if has_zeroshot and has_fewshot:
             logger.info("Creating zero-shot vs few-shot comparisons...")
@@ -1074,31 +1107,20 @@ class SpatialExtrapolationEvaluator:
             df_zero = df[df['transfer_type'] == 'zero-shot']
             df_few = df[df['transfer_type'] == 'few-shot']
 
-            # Compute shared vmin/vmax for R² (centered at 0, capped at ±1)
-            if 'seed_id' in df.columns:
-                df_mean = df[df['seed_id'] == 'mean']
-            else:
-                df_mean = df
-            r2_max_abs = max(abs(df_mean['log_r2'].min()), abs(df_mean['log_r2'].max()))
-            # Cap at 1.0 since R² cannot exceed 1.0
-            r2_vmin, r2_vmax = max(-r2_max_abs, -1.0), min(r2_max_abs, 1.0)
-
-            # R² comparisons (row 0)
+            # R² comparisons (row 0) - using shared scales
             self.create_heatmap(df_zero, 'anp', 'log_r2', 'ANP Zero-Shot',
-                               cmap='RdYlGn', vmin=r2_vmin, vmax=r2_vmax,
+                               cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
                                ax=axes[0, 0], center=0.0)
             self.create_heatmap(df_few, 'anp', 'log_r2', 'ANP Few-Shot',
-                               cmap='RdYlGn', vmin=r2_vmin, vmax=r2_vmax,
+                               cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
                                ax=axes[0, 1], center=0.0)
 
-            # RMSE comparisons (row 1)
-            rmse_vmin = df_mean['log_rmse'].min()
-            rmse_vmax = df_mean['log_rmse'].max()
+            # RMSE comparisons (row 1) - using shared scales
             self.create_heatmap(df_zero, 'anp', 'log_rmse', 'ANP Zero-Shot',
-                               cmap='RdYlGn_r', vmin=rmse_vmin, vmax=rmse_vmax,
+                               cmap='RdYlGn_r', vmin=shared_rmse_vmin, vmax=shared_rmse_vmax,
                                ax=axes[1, 0])
             self.create_heatmap(df_few, 'anp', 'log_rmse', 'ANP Few-Shot',
-                               cmap='RdYlGn_r', vmin=rmse_vmin, vmax=rmse_vmax,
+                               cmap='RdYlGn_r', vmin=shared_rmse_vmin, vmax=shared_rmse_vmax,
                                ax=axes[1, 1])
 
             plt.suptitle('Zero-Shot vs Few-Shot Transfer', fontsize=18, fontweight='bold', y=0.995)
@@ -1119,21 +1141,13 @@ class SpatialExtrapolationEvaluator:
                     logger.warning("Skipping z-score std comparison: insufficient data")
                     plt.close(fig)
                 else:
-                    # Compute shared vmin/vmax for z-score std (centered at 1.0)
-                    df_mean_calib = pd.concat([df_zero_calib, df_few_calib])
-                    if 'seed_id' in df_mean_calib.columns:
-                        df_mean_calib = df_mean_calib[df_mean_calib['seed_id'] == 'mean']
-
-                    z_std_max_abs = max(abs(df_mean_calib['z_score_std'].min() - 1.0),
-                                       abs(df_mean_calib['z_score_std'].max() - 1.0))
-                    z_std_vmin, z_std_vmax = 1.0 - z_std_max_abs, 1.0 + z_std_max_abs
-
                     # Z-score std comparisons (centered at 1 = perfect calibration)
+                    # Using shared scales computed above
                     self.create_heatmap(df_zero_calib, 'anp', 'z_score_std', 'ANP Zero-Shot: Z-Score Std',
-                                       cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
+                                       cmap='RdYlGn', vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
                                        ax=axes[0], center=1.0)
                     self.create_heatmap(df_few_calib, 'anp', 'z_score_std', 'ANP Few-Shot: Z-Score Std',
-                                       cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
+                                       cmap='RdYlGn', vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
                                        ax=axes[1], center=1.0)
 
                     plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std, 1.0 = Perfect)',
@@ -1145,34 +1159,37 @@ class SpatialExtrapolationEvaluator:
             else:
                 logger.warning("Skipping z-score std comparison: metric not available in results")
 
-        # Create visualizations for each transfer type
+        # Create visualizations for each transfer type (using same shared scales for comparability)
         for transfer_type in (['zero-shot'] if has_zeroshot else []) + (['few-shot'] if has_fewshot else []):
             df_transfer = df[df['transfer_type'] == transfer_type]
             suffix = f"_{transfer_type.replace('-', '')}"
 
-            # R² comparison with centered colormap
+            # R² comparison with centered colormap (using shared scales)
             fig = self.create_comparison_heatmap(
                 df_transfer, 'log_r2', f'Log R² ({transfer_type.title()})',
-                cmap='RdYlGn', reverse_cmap=False, center=0.0
+                cmap='RdYlGn', reverse_cmap=False, center=0.0,
+                vmin=shared_r2_vmin, vmax=shared_r2_vmax
             )
             fig.savefig(self.output_dir / f'extrapolation_r2{suffix}.png', dpi=300, bbox_inches='tight')
             plt.close(fig)
             logger.info(f"Saved R² comparison ({transfer_type})")
 
-            # RMSE comparison
+            # RMSE comparison (using shared scales)
             fig = self.create_comparison_heatmap(
                 df_transfer, 'log_rmse', f'Log RMSE ({transfer_type.title()})',
-                cmap='RdYlGn', reverse_cmap=True
+                cmap='RdYlGn', reverse_cmap=True,
+                vmin=shared_rmse_vmin, vmax=shared_rmse_vmax
             )
             fig.savefig(self.output_dir / f'extrapolation_rmse{suffix}.png', dpi=300, bbox_inches='tight')
             plt.close(fig)
             logger.info(f"Saved RMSE comparison ({transfer_type})")
 
-            # Z-score std comparison (calibration) if available
-            if 'z_score_std' in df_transfer.columns:
+            # Z-score std comparison (calibration) if available (using shared scales)
+            if 'z_score_std' in df_transfer.columns and shared_z_std_vmin is not None:
                 fig = self.create_comparison_heatmap(
                     df_transfer, 'z_score_std', f'Z-Score Std ({transfer_type.title()})',
-                    cmap='RdYlGn', reverse_cmap=False, center=1.0
+                    cmap='RdYlGn', reverse_cmap=False, center=1.0,
+                    vmin=shared_z_std_vmin, vmax=shared_z_std_vmax
                 )
                 fig.savefig(self.output_dir / f'extrapolation_calibration{suffix}.png', dpi=300, bbox_inches='tight')
                 plt.close(fig)
