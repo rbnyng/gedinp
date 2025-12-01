@@ -69,6 +69,7 @@ class SpatialExtrapolationEvaluator:
         few_shot_tiles: Optional[int] = None,
         few_shot_epochs: int = 5,
         few_shot_lr: float = 1e-4,
+        few_shot_batch_size: Optional[int] = None,
         include_zero_shot: bool = True
     ):
         """
@@ -84,6 +85,7 @@ class SpatialExtrapolationEvaluator:
                            If None, only zero-shot evaluation is performed.
             few_shot_epochs: Number of epochs for few-shot fine-tuning
             few_shot_lr: Learning rate for few-shot fine-tuning
+            few_shot_batch_size: Batch size for few-shot fine-tuning. If None, uses batch_size // 4
             include_zero_shot: If True and few_shot_tiles is set, also evaluate zero-shot performance
         """
         self.results_dir = Path(results_dir)
@@ -94,6 +96,8 @@ class SpatialExtrapolationEvaluator:
         self.few_shot_tiles = few_shot_tiles
         self.few_shot_epochs = few_shot_epochs
         self.few_shot_lr = few_shot_lr
+        # Use smaller batch size for fine-tuning to avoid OOM
+        self.few_shot_batch_size = few_shot_batch_size if few_shot_batch_size is not None else max(1, batch_size // 4)
         self.include_zero_shot = include_zero_shot
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -101,7 +105,7 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Device: {self.device}")
         logger.info(f"Context ratio: {context_ratio*100:.0f}% (for within-tile context/target split)")
         if few_shot_tiles is not None:
-            logger.info(f"Few-shot fine-tuning: {few_shot_tiles} tiles, {few_shot_epochs} epochs, lr={few_shot_lr}")
+            logger.info(f"Few-shot fine-tuning: {few_shot_tiles} tiles, {few_shot_epochs} epochs, lr={few_shot_lr}, batch_size={self.few_shot_batch_size}")
             if include_zero_shot:
                 logger.info("Will also evaluate zero-shot performance for comparison")
         else:
@@ -367,7 +371,7 @@ class SpatialExtrapolationEvaluator:
 
                 train_loader = DataLoader(
                     train_dataset,
-                    batch_size=self.batch_size,
+                    batch_size=self.few_shot_batch_size,  # Use smaller batch size for fine-tuning
                     shuffle=True,
                     collate_fn=collate_neural_process,
                     num_workers=4
@@ -1286,6 +1290,13 @@ Examples:
     )
 
     parser.add_argument(
+        '--few_shot_batch_size',
+        type=int,
+        default=None,
+        help='Batch size for few-shot fine-tuning. If not specified, uses batch_size // 4 for memory efficiency'
+    )
+
+    parser.add_argument(
         '--include_zero_shot',
         action='store_true',
         default=False,
@@ -1322,6 +1333,7 @@ def main():
         few_shot_tiles=args.few_shot_tiles,
         few_shot_epochs=args.few_shot_epochs,
         few_shot_lr=args.few_shot_lr,
+        few_shot_batch_size=args.few_shot_batch_size,
         include_zero_shot=args.include_zero_shot
     )
 
