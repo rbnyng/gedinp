@@ -947,8 +947,6 @@ class SpatialExtrapolationEvaluator:
             model_label = model_type.upper() if model_type != 'xgboost' else 'XGBoost'
             title = f'{model_label}: {metric_name}'
 
-        if show_std and std_col in df_mean.columns:
-            title += ' (Mean ± Std across seeds)'
         ax.set_title(title, fontsize=14, fontweight='bold')
         ax.set_xticklabels([REGIONS[r] for r in REGION_ORDER], rotation=45, ha='right')
         ax.set_yticklabels([REGIONS[r] for r in REGION_ORDER], rotation=0)
@@ -1248,7 +1246,7 @@ class SpatialExtrapolationEvaluator:
                                cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
                                ax=axes[2, 1], center=0.0, simple_title=True)
 
-            plt.suptitle('Zero-Shot Transfer: Comprehensive Comparison', fontsize=18, fontweight='bold', y=0.995)
+            plt.suptitle('Zero-Shot Transfer Comparison', fontsize=18, fontweight='bold', y=0.995)
             plt.tight_layout(rect=[0, 0, 1, 0.99])
             fig.savefig(self.output_dir / 'extrapolation_zeroshot_3x2_comprehensive.png', dpi=300, bbox_inches='tight')
             plt.close(fig)
@@ -1275,7 +1273,7 @@ class SpatialExtrapolationEvaluator:
                                cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
                                ax=axes[2], center=0.0, simple_title=False)
 
-            plt.suptitle('Few-Shot Transfer: ANP Performance Across Metrics', fontsize=18, fontweight='bold', y=0.98)
+            plt.suptitle('ANP Few-Shot Fine Tuning Performance', fontsize=18, fontweight='bold', y=0.98)
             plt.tight_layout(rect=[0, 0, 1, 0.96])
             fig.savefig(self.output_dir / 'extrapolation_fewshot_1x3_anp.png', dpi=300, bbox_inches='tight')
             plt.close(fig)
