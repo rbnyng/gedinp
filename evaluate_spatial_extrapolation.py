@@ -554,6 +554,12 @@ class SpatialExtrapolationEvaluator:
 
         calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
 
+        # Rename z_mean and z_std to match expected column names
+        if 'z_mean' in calib_metrics:
+            calib_metrics['z_score_mean'] = calib_metrics.pop('z_mean')
+        if 'z_std' in calib_metrics:
+            calib_metrics['z_score_std'] = calib_metrics.pop('z_std')
+
         log_metrics = {
             'log_rmse': metrics['rmse'],
             'log_mae': metrics['mae'],
@@ -609,6 +615,12 @@ class SpatialExtrapolationEvaluator:
         metrics = compute_metrics(preds, targets, uncertainties)
 
         calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
+
+        # Rename z_mean and z_std to match expected column names
+        if 'z_mean' in calib_metrics:
+            calib_metrics['z_score_mean'] = calib_metrics.pop('z_mean')
+        if 'z_std' in calib_metrics:
+            calib_metrics['z_score_std'] = calib_metrics.pop('z_std')
 
         log_metrics = {
             'log_rmse': metrics['rmse'],
@@ -776,7 +788,8 @@ class SpatialExtrapolationEvaluator:
     ) -> dict:
         """Aggregate results across seeds for a given train-test region pair."""
         metric_keys = ['log_rmse', 'log_mae', 'log_r2', 'mean_uncertainty',
-                       'coverage_1sigma', 'coverage_2sigma', 'coverage_3sigma', 'z_score_std']
+                       'coverage_1sigma', 'coverage_2sigma', 'coverage_3sigma',
+                       'z_score_mean', 'z_score_std']
 
         aggregated = {
             'train_region': train_region,
