@@ -1157,7 +1157,7 @@ class SpatialExtrapolationEvaluator:
 
             plt.suptitle('Zero-Shot vs Few-Shot Transfer', fontsize=18, fontweight='bold', y=0.995)
             plt.tight_layout(rect=[0, 0, 1, 0.99])
-            fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot.png', dpi=600, bbox_inches='tight')
+            fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot.png', dpi=750, bbox_inches='tight')
             plt.close(fig)
             logger.info("Saved zero-shot vs few-shot comparison")
 
@@ -1188,7 +1188,7 @@ class SpatialExtrapolationEvaluator:
                     plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std, 1.0 = Perfect)',
                                fontsize=18, fontweight='bold', y=0.98)
                     plt.tight_layout(rect=[0, 0, 1, 0.96])
-                    fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_calibration.png', dpi=600, bbox_inches='tight')
+                    fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_calibration.png', dpi=750, bbox_inches='tight')
                     plt.close(fig)
                     logger.info("Saved zero-shot vs few-shot calibration comparison")
             else:
@@ -1210,7 +1210,7 @@ class SpatialExtrapolationEvaluator:
                 plt.suptitle('Zero-Shot vs Few-Shot: 1-Sigma Coverage (68.3% = Ideal)',
                            fontsize=18, fontweight='bold', y=0.98)
                 plt.tight_layout(rect=[0, 0, 1, 0.96])
-                fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_coverage.png', dpi=600, bbox_inches='tight')
+                fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_coverage.png', dpi=750, bbox_inches='tight')
                 plt.close(fig)
                 logger.info("Saved zero-shot vs few-shot coverage comparison")
 
@@ -1248,7 +1248,7 @@ class SpatialExtrapolationEvaluator:
 
             plt.suptitle('Zero-Shot Transfer Comparison', fontsize=18, fontweight='bold', y=0.995)
             plt.tight_layout(rect=[0, 0, 1, 0.99])
-            fig.savefig(self.output_dir / 'extrapolation_zeroshot_3x2_comprehensive.png', dpi=600, bbox_inches='tight')
+            fig.savefig(self.output_dir / 'extrapolation_zeroshot_3x2_comprehensive.png', dpi=750, bbox_inches='tight')
             plt.close(fig)
             logger.info("Saved 3x2 zero-shot comprehensive comparison")
 
@@ -1275,7 +1275,7 @@ class SpatialExtrapolationEvaluator:
 
             plt.suptitle('ANP Few-Shot Fine Tuning Performance', fontsize=18, fontweight='bold', y=0.995)
             plt.tight_layout(rect=[0, 0, 1, 0.99])
-            fig.savefig(self.output_dir / 'extrapolation_fewshot_3x1_anp.png', dpi=600, bbox_inches='tight')
+            fig.savefig(self.output_dir / 'extrapolation_fewshot_3x1_anp.png', dpi=750, bbox_inches='tight')
             plt.close(fig)
             logger.info("Saved 3x1 few-shot ANP comparison")
 
@@ -1290,7 +1290,7 @@ class SpatialExtrapolationEvaluator:
                 cmap='RdYlGn', reverse_cmap=False, center=0.0,
                 vmin=shared_r2_vmin, vmax=shared_r2_vmax
             )
-            fig.savefig(self.output_dir / f'extrapolation_r2{suffix}.png', dpi=600, bbox_inches='tight')
+            fig.savefig(self.output_dir / f'extrapolation_r2{suffix}.png', dpi=750, bbox_inches='tight')
             plt.close(fig)
             logger.info(f"Saved R² comparison ({transfer_type})")
 
@@ -1300,7 +1300,7 @@ class SpatialExtrapolationEvaluator:
                 cmap='RdYlGn', reverse_cmap=True,
                 vmin=shared_rmse_vmin, vmax=shared_rmse_vmax
             )
-            fig.savefig(self.output_dir / f'extrapolation_rmse{suffix}.png', dpi=600, bbox_inches='tight')
+            fig.savefig(self.output_dir / f'extrapolation_rmse{suffix}.png', dpi=750, bbox_inches='tight')
             plt.close(fig)
             logger.info(f"Saved RMSE comparison ({transfer_type})")
 
@@ -1314,7 +1314,7 @@ class SpatialExtrapolationEvaluator:
                     cmap=custom_cmap, reverse_cmap=False, center=1.0,
                     vmin=shared_z_std_vmin, vmax=shared_z_std_vmax
                 )
-                fig.savefig(self.output_dir / f'extrapolation_calibration{suffix}.png', dpi=600, bbox_inches='tight')
+                fig.savefig(self.output_dir / f'extrapolation_calibration{suffix}.png', dpi=750, bbox_inches='tight')
                 plt.close(fig)
                 logger.info(f"Saved calibration comparison ({transfer_type})")
 
@@ -1325,7 +1325,7 @@ class SpatialExtrapolationEvaluator:
                     cmap='RdYlGn', reverse_cmap=False,
                     vmin=shared_cov1_vmin, vmax=shared_cov1_vmax
                 )
-                fig.savefig(self.output_dir / f'extrapolation_coverage_1sigma{suffix}.png', dpi=600, bbox_inches='tight')
+                fig.savefig(self.output_dir / f'extrapolation_coverage_1sigma{suffix}.png', dpi=750, bbox_inches='tight')
                 plt.close(fig)
                 logger.info(f"Saved 1-sigma coverage comparison ({transfer_type})")
 
