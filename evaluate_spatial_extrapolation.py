@@ -1110,7 +1110,7 @@ class SpatialExtrapolationEvaluator:
                                    cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
                                    ax=axes[1], center=1.0)
 
-                plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std, 1.0 = Perfect)',
+                plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std)',
                            fontsize=18, fontweight='bold', y=0.98)
                 plt.tight_layout(rect=[0, 0, 1, 0.96])
                 fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_calibration.png', dpi=300, bbox_inches='tight')
@@ -1143,7 +1143,7 @@ class SpatialExtrapolationEvaluator:
             # Z-score std comparison (calibration) if available
             if 'z_score_std' in df_transfer.columns:
                 fig = self.create_comparison_heatmap(
-                    df_transfer, 'z_score_std', f'Z-Score Std ({transfer_type.title()}, 1.0 = Perfect)',
+                    df_transfer, 'z_score_std', f'Z-Score Std ({transfer_type.title()})',
                     cmap='RdYlGn', reverse_cmap=False, center=1.0
                 )
                 fig.savefig(self.output_dir / f'extrapolation_calibration{suffix}.png', dpi=300, bbox_inches='tight')
