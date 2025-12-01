@@ -776,7 +776,7 @@ class SpatialExtrapolationEvaluator:
     ) -> dict:
         """Aggregate results across seeds for a given train-test region pair."""
         metric_keys = ['log_rmse', 'log_mae', 'log_r2', 'mean_uncertainty',
-                       'coverage_1sigma', 'coverage_2sigma', 'coverage_3sigma']
+                       'coverage_1sigma', 'coverage_2sigma', 'coverage_3sigma', 'z_score_std']
 
         aggregated = {
             'train_region': train_region,
@@ -1085,6 +1085,29 @@ class SpatialExtrapolationEvaluator:
             plt.close(fig)
             logger.info("Saved zero-shot vs few-shot comparison")
 
+            # Also create z-score std comparison if available (calibration metric)
+            if 'z_score_std' in df.columns:
+                fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+                # Compute shared vmin/vmax for z-score std (centered at 1.0)
+                z_std_max_abs = max(abs(df_mean['z_score_std'].min() - 1.0), abs(df_mean['z_score_std'].max() - 1.0))
+                z_std_vmin, z_std_vmax = 1.0 - z_std_max_abs, 1.0 + z_std_max_abs
+
+                # Z-score std comparisons (centered at 1 = perfect calibration)
+                self.create_heatmap(df_zero, 'anp', 'z_score_std', 'ANP Zero-Shot: Z-Score Std',
+                                   cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
+                                   ax=axes[0], center=1.0)
+                self.create_heatmap(df_few, 'anp', 'z_score_std', 'ANP Few-Shot: Z-Score Std',
+                                   cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
+                                   ax=axes[1], center=1.0)
+
+                plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std, 1.0 = Perfect)',
+                           fontsize=18, fontweight='bold', y=0.98)
+                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_calibration.png', dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                logger.info("Saved zero-shot vs few-shot calibration comparison")
+
         # Create visualizations for each transfer type
         for transfer_type in (['zero-shot'] if has_zeroshot else []) + (['few-shot'] if has_fewshot else []):
             df_transfer = df[df['transfer_type'] == transfer_type]
@@ -1108,6 +1131,16 @@ class SpatialExtrapolationEvaluator:
             plt.close(fig)
             logger.info(f"Saved RMSE comparison ({transfer_type})")
 
+            # Z-score std comparison (calibration) if available
+            if 'z_score_std' in df_transfer.columns:
+                fig = self.create_comparison_heatmap(
+                    df_transfer, 'z_score_std', f'Z-Score Std ({transfer_type.title()}, 1.0 = Perfect)',
+                    cmap='RdYlGn', reverse_cmap=False, center=1.0
+                )
+                fig.savefig(self.output_dir / f'extrapolation_calibration{suffix}.png', dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                logger.info(f"Saved calibration comparison ({transfer_type})")
+
         self.create_summary_table(df)
 
     def create_summary_table(self, df: pd.DataFrame):
@@ -1130,12 +1163,17 @@ class SpatialExtrapolationEvaluator:
             group_cols.insert(1, 'transfer_type')
 
         # For mean results, we already have std columns, so just report means
-        summary = df_mean.groupby(group_cols).agg({
+        agg_dict = {
             'log_r2': ['mean'],
             'log_rmse': ['mean'],
             'coverage_1sigma': ['mean'],
             'mean_uncertainty': ['mean']
-        }).round(3)
+        }
+        # Add z_score_std if available
+        if 'z_score_std' in df_mean.columns:
+            agg_dict['z_score_std'] = ['mean']
+
+        summary = df_mean.groupby(group_cols).agg(agg_dict).round(3)
 
         output_path = self.output_dir / 'extrapolation_summary.csv'
         summary.to_csv(output_path)
