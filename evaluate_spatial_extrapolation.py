@@ -1,9 +1,24 @@
 """
+Spatial Extrapolation Evaluation with Zero-Shot and Few-Shot Transfer
+
+This script evaluates trained models on spatial extrapolation by testing each model
+on data from different regions. Supports both:
+- Zero-shot: Direct transfer with no adaptation to target region
+- Few-shot: Fine-tune on small subset of target region before testing
+
 Usage:
+    # Zero-shot only (default)
     python evaluate_spatial_extrapolation.py --results_dir ./regional_results --output_dir ./extrapolation_analysis
+
+    # Few-shot with 10 training tiles from target region
+    python evaluate_spatial_extrapolation.py --results_dir ./regional_results --few_shot_tiles 10 --few_shot_epochs 5
+
+    # Both zero-shot and few-shot
+    python evaluate_spatial_extrapolation.py --results_dir ./regional_results --few_shot_tiles 10 --include_zero_shot
 """
 
 import argparse
+import copy
 import json
 import logging
 import pickle
@@ -49,18 +64,52 @@ class SpatialExtrapolationEvaluator:
         results_dir: Path,
         output_dir: Path,
         device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-        num_context: int = 100,
-        batch_size: int = 32
+        context_ratio: float = 0.5,
+        batch_size: int = 32,
+        few_shot_tiles: Optional[int] = None,
+        few_shot_epochs: int = 5,
+        few_shot_lr: float = 1e-4,
+        few_shot_batch_size: Optional[int] = None,
+        include_zero_shot: bool = True
     ):
+        """
+        Initialize the spatial extrapolation evaluator.
+
+        Args:
+            results_dir: Directory containing regional training results
+            output_dir: Output directory for evaluation results
+            device: Device to use for evaluation
+            context_ratio: Ratio of context shots to total shots (0-1) within each tile. Default: 0.5
+            batch_size: Batch size for evaluation
+            few_shot_tiles: Number of tiles from target region to use for few-shot fine-tuning.
+                           If None, only zero-shot evaluation is performed.
+            few_shot_epochs: Number of epochs for few-shot fine-tuning
+            few_shot_lr: Learning rate for few-shot fine-tuning
+            few_shot_batch_size: Batch size for few-shot fine-tuning. If None, uses batch_size // 4
+            include_zero_shot: If True and few_shot_tiles is set, also evaluate zero-shot performance
+        """
         self.results_dir = Path(results_dir)
         self.output_dir = Path(output_dir)
         self.device = device
-        self.num_context = num_context
+        self.context_ratio = context_ratio
         self.batch_size = batch_size
+        self.few_shot_tiles = few_shot_tiles
+        self.few_shot_epochs = few_shot_epochs
+        self.few_shot_lr = few_shot_lr
+        # Use smaller batch size for fine-tuning to avoid OOM
+        self.few_shot_batch_size = few_shot_batch_size if few_shot_batch_size is not None else max(1, batch_size // 4)
+        self.include_zero_shot = include_zero_shot
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Device: {self.device}")
+        logger.info(f"Context ratio: {context_ratio*100:.0f}% (for within-tile context/target split)")
+        if few_shot_tiles is not None:
+            logger.info(f"Few-shot fine-tuning: {few_shot_tiles} tiles, {few_shot_epochs} epochs, lr={few_shot_lr}, batch_size={self.few_shot_batch_size}")
+            if include_zero_shot:
+                logger.info("Will also evaluate zero-shot performance for comparison")
+        else:
+            logger.info("Zero-shot evaluation only (no few-shot fine-tuning)")
         logger.info(f"Results directory: {self.results_dir}")
         logger.info(f"Output directory: {self.output_dir}")
 
@@ -125,7 +174,11 @@ class SpatialExtrapolationEvaluator:
         return models
 
     def _load_single_anp_model(self, checkpoint_path: Path, config: dict) -> GEDINeuralProcess:
-        """Helper to load a single ANP model from checkpoint."""
+        """Helper to load a single ANP model from checkpoint.
+
+        Note: Models are loaded to CPU by default for memory efficiency.
+        They will be moved to GPU on-demand during evaluation.
+        """
         model = GEDINeuralProcess(
             patch_size=config.get('patch_size', 3),
             embedding_channels=128,
@@ -138,9 +191,9 @@ class SpatialExtrapolationEvaluator:
             num_attention_heads=config.get('num_attention_heads', 4)
         )
 
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        # Load to CPU first for memory efficiency
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
-        model.to(self.device)
         model.eval()
 
         return model
@@ -209,15 +262,23 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Loaded {len(models)} XGBoost model seeds for {region}")
         return models
 
-    def load_test_data(self, region: str, seed_id: Optional[str] = None) -> Optional[DataLoader]:
-        """Load test data for a specific region and seed.
+    def load_target_region_data(
+        self,
+        region: str,
+        seed_id: Optional[str] = None,
+        split_for_fewshot: bool = False
+    ) -> Optional[Dict[str, DataLoader]]:
+        """Load target region data, optionally loading train split for few-shot fine-tuning.
 
         Args:
-            region: The region to load test data for
-            seed_id: The seed ID to load test data for. If None, loads from first seed or root.
+            region: The region to load data for
+            seed_id: The seed ID to load data for. If None, loads from first seed or root.
+            split_for_fewshot: If True and self.few_shot_tiles is set, load both train split
+                              (for few-shot fine-tuning) and test split (for evaluation).
 
         Returns:
-            DataLoader for the test data
+            Dict with 'train' and/or 'test' DataLoaders. If split_for_fewshot is False,
+            only returns {'test': dataloader}.
         """
         region_dir = self.results_dir / region / 'anp'
 
@@ -225,26 +286,29 @@ class SpatialExtrapolationEvaluator:
             logger.warning(f"Region directory not found: {region_dir}")
             return None
 
-        # Determine path based on seed_id
+        # Determine paths based on seed_id
         if seed_id is not None and seed_id != 'default':
-            # Load test split for specific seed
             test_split_path = region_dir / seed_id / 'test_split.parquet'
+            train_split_path = region_dir / seed_id / 'train_split.parquet'
             config_path = region_dir / seed_id / 'config.json'
         else:
             # Fallback: load from first seed or root directory
             seed_dirs = list(region_dir.glob('seed_*'))
             if seed_dirs:
                 test_split_path = seed_dirs[0] / 'test_split.parquet'
+                train_split_path = seed_dirs[0] / 'train_split.parquet'
                 config_path = seed_dirs[0] / 'config.json'
             else:
                 test_split_path = region_dir / 'test_split.parquet'
+                train_split_path = region_dir / 'train_split.parquet'
                 config_path = region_dir / 'config.json'
 
         if not test_split_path.exists():
             logger.warning(f"Test split not found: {test_split_path}")
             return None
 
-        df = pd.read_parquet(test_split_path)
+        # Load test split
+        df_test = pd.read_parquet(test_split_path)
 
         patch_size = 3
         embedding_channels = 128
@@ -255,7 +319,8 @@ class SpatialExtrapolationEvaluator:
             arr = np.array(flat_list)
             return arr.reshape(patch_size, patch_size, embedding_channels)
 
-        df['embedding_patch'] = df['embedding_patch'].apply(reshape_embedding)
+        # Process test data
+        df_test['embedding_patch'] = df_test['embedding_patch'].apply(reshape_embedding)
 
         global_bounds = None
         if config_path.exists():
@@ -263,27 +328,181 @@ class SpatialExtrapolationEvaluator:
                 config = json.load(f)
                 global_bounds = config.get('global_bounds', None)
 
-        dataset = GEDINeuralProcessDataset(
-            data_df=df,
+        context_ratio = self.context_ratio
+
+        result = {}
+
+        # Load train split for few-shot fine-tuning if requested
+        if split_for_fewshot and self.few_shot_tiles is not None and self.few_shot_tiles > 0:
+            if not train_split_path.exists():
+                logger.warning(f"Train split not found for few-shot: {train_split_path}. Using zero-shot only.")
+                split_for_fewshot = False
+            else:
+                # Load training split from target region
+                df_train = pd.read_parquet(train_split_path)
+                df_train['embedding_patch'] = df_train['embedding_patch'].apply(reshape_embedding)
+
+                # Get unique tiles from training data
+                unique_train_tiles = df_train['tile_id'].unique()
+                n_train_tiles = len(unique_train_tiles)
+
+                if n_train_tiles < self.few_shot_tiles:
+                    logger.warning(f"Not enough training tiles in {region} ({n_train_tiles}) for few-shot "
+                                 f"(requested {self.few_shot_tiles} tiles). Using all available training tiles.")
+                    n_tiles_to_use = n_train_tiles
+                else:
+                    n_tiles_to_use = self.few_shot_tiles
+
+                # Randomly sample tiles from training data for few-shot fine-tuning
+                np.random.seed(42)  # For reproducibility
+                sampled_train_tiles = np.random.choice(unique_train_tiles, size=n_tiles_to_use, replace=False)
+                df_train_fewshot = df_train[df_train['tile_id'].isin(sampled_train_tiles)]
+
+                # Create training dataset for few-shot fine-tuning
+                train_dataset = GEDINeuralProcessDataset(
+                    data_df=df_train_fewshot,
+                    min_shots_per_tile=2,
+                    context_ratio_range=(context_ratio, context_ratio),
+                    normalize_coords=True,
+                    augment_coords=True,  # Use augmentation for training
+                    coord_noise_std=0.01,
+                    global_bounds=global_bounds
+                )
+
+                train_loader = DataLoader(
+                    train_dataset,
+                    batch_size=self.few_shot_batch_size,  # Use smaller batch size for fine-tuning
+                    shuffle=True,
+                    collate_fn=collate_neural_process,
+                    num_workers=4
+                )
+
+                result['train'] = train_loader
+
+                seed_info = f" (seed: {seed_id})" if seed_id else ""
+                logger.info(f"Loaded {region}{seed_info} for few-shot: {len(train_dataset)} train tiles (from training split)")
+
+        # Always create test dataset from test split
+        test_dataset = GEDINeuralProcessDataset(
+            data_df=df_test,
             min_shots_per_tile=2,
-            context_ratio_range=(0.5, 0.5),
+            context_ratio_range=(context_ratio, context_ratio),
             normalize_coords=True,
-            augment_coords=False,  # no aug for evaluation
+            augment_coords=False,
             coord_noise_std=0.0,
             global_bounds=global_bounds
         )
 
-        dataloader = DataLoader(
-            dataset,
+        test_loader = DataLoader(
+            test_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             collate_fn=collate_neural_process,
             num_workers=4
         )
 
+        result['test'] = test_loader
+
         seed_info = f" (seed: {seed_id})" if seed_id else ""
-        logger.info(f"Loaded test data for {region}{seed_info}: {len(dataset)} tiles")
-        return dataloader
+        if 'train' not in result:
+            logger.info(f"Loaded {region}{seed_info}: {len(test_dataset)} test tiles")
+        else:
+            logger.info(f"Loaded {region}{seed_info}: {len(test_dataset)} test tiles (for evaluation)")
+
+        return result
+
+    def fine_tune_anp_model(
+        self,
+        model: GEDINeuralProcess,
+        train_loader: DataLoader,
+        train_region: str,
+        test_region: str
+    ) -> GEDINeuralProcess:
+        """Fine-tune an ANP model on few-shot data from the target region.
+
+        Args:
+            model: Pre-trained model from source region
+            train_loader: DataLoader with few-shot training data from target region
+            train_region: Source region name (for logging)
+            test_region: Target region name (for logging)
+
+        Returns:
+            Fine-tuned model
+        """
+        # Create a copy of the model for fine-tuning
+        # Move to CPU first to avoid duplicating GPU memory usage
+        original_device = next(model.parameters()).device
+        model_cpu = model.cpu()
+        fine_tuned_model = copy.deepcopy(model_cpu)
+
+        # Move models back to their devices
+        model.to(original_device)  # Original model back to its device
+        fine_tuned_model.to(self.device)  # Fine-tuned copy to GPU
+        fine_tuned_model.train()
+
+        # Setup optimizer
+        optimizer = torch.optim.Adam(fine_tuned_model.parameters(), lr=self.few_shot_lr)
+
+        logger.info(f"Fine-tuning ANP {train_region} → {test_region} for {self.few_shot_epochs} epochs")
+
+        for epoch in range(self.few_shot_epochs):
+            epoch_loss = 0.0
+            n_batches = 0
+
+            for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.few_shot_epochs}", leave=False):
+                optimizer.zero_grad()
+                tile_losses = []
+                n_tiles = len(batch['context_coords'])
+
+                # Collect losses from all tiles in the batch
+                for i in range(n_tiles):
+                    context_coords = batch['context_coords'][i].to(self.device)
+                    context_embeddings = batch['context_embeddings'][i].to(self.device)
+                    context_agbd = batch['context_agbd'][i].to(self.device)
+                    target_coords = batch['target_coords'][i].to(self.device)
+                    target_embeddings = batch['target_embeddings'][i].to(self.device)
+                    target_agbd = batch['target_agbd'][i].to(self.device)
+
+                    pred_mean, pred_log_var, kl_loss, _ = fine_tuned_model(
+                        context_coords,
+                        context_embeddings,
+                        context_agbd,
+                        target_coords,
+                        target_embeddings,
+                        training=True
+                    )
+
+                    # Reconstruction loss (MSE) - ensure it's reduced to scalar
+                    recon_loss = torch.nn.functional.mse_loss(pred_mean, target_agbd, reduction='mean')
+
+                    # Total loss (reconstruction + KL divergence for probabilistic models)
+                    if kl_loss is not None:
+                        # Ensure KL loss is also a scalar
+                        if kl_loss.numel() > 1:
+                            kl_loss = kl_loss.mean()
+                        tile_loss = recon_loss + 0.01 * kl_loss  # Small weight on KL
+                    else:
+                        tile_loss = recon_loss
+
+                    tile_losses.append(tile_loss)
+
+                # Average loss across tiles in the batch
+                batch_loss = torch.stack(tile_losses).mean()
+
+                # Backprop and update once per batch
+                batch_loss.backward()
+                optimizer.step()
+
+                epoch_loss += batch_loss.item()
+                n_batches += 1
+
+            avg_loss = epoch_loss / n_batches if n_batches > 0 else 0.0
+            logger.info(f"  Epoch {epoch+1}: avg_loss = {avg_loss:.4f}")
+
+        fine_tuned_model.eval()
+        logger.info(f"Fine-tuning complete for {train_region} → {test_region}")
+
+        return fine_tuned_model
 
     def evaluate_anp_on_region(
         self,
@@ -334,6 +553,12 @@ class SpatialExtrapolationEvaluator:
         metrics = compute_metrics(preds, targets, uncertainties)
 
         calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
+
+        # Rename z_mean and z_std to match expected column names
+        if 'z_mean' in calib_metrics:
+            calib_metrics['z_score_mean'] = calib_metrics.pop('z_mean')
+        if 'z_std' in calib_metrics:
+            calib_metrics['z_score_std'] = calib_metrics.pop('z_std')
 
         log_metrics = {
             'log_rmse': metrics['rmse'],
@@ -391,6 +616,12 @@ class SpatialExtrapolationEvaluator:
 
         calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
 
+        # Rename z_mean and z_std to match expected column names
+        if 'z_mean' in calib_metrics:
+            calib_metrics['z_score_mean'] = calib_metrics.pop('z_mean')
+        if 'z_std' in calib_metrics:
+            calib_metrics['z_score_std'] = calib_metrics.pop('z_std')
+
         log_metrics = {
             'log_rmse': metrics['rmse'],
             'log_mae': metrics['mae'],
@@ -436,7 +667,7 @@ class SpatialExtrapolationEvaluator:
                 if model_data is not None:
                     models[region] = model_data  # List of (model, config, seed_id) tuples
 
-            # Evaluate: train_region x test_region x seed
+            # Evaluate: train_region x test_region x seed x transfer_type
             for train_region in REGION_ORDER:
                 if train_region not in models:
                     logger.warning(f"Skipping {train_region} (model not found)")
@@ -445,34 +676,98 @@ class SpatialExtrapolationEvaluator:
                 model_seeds = models[train_region]  # List of (model, config, seed_id)
 
                 for test_region in REGION_ORDER:
-                    # Evaluate each seed
-                    seed_results = []
-                    for model, config, seed_id in model_seeds:
-                        # Load test data for this specific seed in test_region
-                        test_loader = self.load_test_data(test_region, seed_id=seed_id)
-                        if test_loader is None:
-                            logger.warning(f"Skipping {test_region} seed {seed_id} (test data not found)")
-                            continue
+                    # Determine which transfer types to evaluate
+                    do_fewshot = (self.few_shot_tiles is not None and
+                                 self.few_shot_tiles > 0 and
+                                 train_region != test_region)  # Only few-shot for OOD
+                    do_zeroshot = (not do_fewshot) or self.include_zero_shot
 
-                        if model_type == 'anp':
-                            result = self.evaluate_anp_on_region(
-                                model, test_loader, train_region, test_region
+                    transfer_types = []
+                    if do_zeroshot:
+                        transfer_types.append('zero-shot')
+                    if do_fewshot:
+                        transfer_types.append('few-shot')
+
+                    for transfer_type in transfer_types:
+                        # Evaluate each seed for this transfer type
+                        seed_results = []
+
+                        for model, config, seed_id in model_seeds:
+                            # Move PyTorch model to GPU for this evaluation (XGBoost models don't need this)
+                            if model_type == 'anp':
+                                model.to(self.device)
+
+                            # Load target region data
+                            split_for_fewshot = (transfer_type == 'few-shot')
+                            data_loaders = self.load_target_region_data(
+                                test_region,
+                                seed_id=seed_id,
+                                split_for_fewshot=split_for_fewshot
                             )
-                        elif model_type == 'xgboost':
-                            result = self.evaluate_xgboost_on_region(
-                                model, test_loader, train_region, test_region
+
+                            if data_loaders is None or 'test' not in data_loaders:
+                                logger.warning(f"Skipping {test_region} seed {seed_id} (data not found)")
+                                if model_type == 'anp':
+                                    model.cpu()  # Move back to CPU before continuing
+                                continue
+
+                            # Prepare model for evaluation
+                            eval_model = model
+                            if transfer_type == 'few-shot' and model_type == 'anp':
+                                if 'train' in data_loaders:
+                                    # Fine-tune the model
+                                    eval_model = self.fine_tune_anp_model(
+                                        model,
+                                        data_loaders['train'],
+                                        train_region,
+                                        test_region
+                                    )
+                                else:
+                                    logger.warning(f"No training data for few-shot in {test_region}, skipping")
+                                    if model_type == 'anp':
+                                        model.cpu()  # Move back to CPU before continuing
+                                    continue
+
+                            # Evaluate on test set
+                            if model_type == 'anp':
+                                result = self.evaluate_anp_on_region(
+                                    eval_model,
+                                    data_loaders['test'],
+                                    train_region,
+                                    test_region
+                                )
+                            elif model_type == 'xgboost':
+                                # XGBoost doesn't support fine-tuning in this implementation
+                                if transfer_type == 'few-shot':
+                                    continue
+                                result = self.evaluate_xgboost_on_region(
+                                    eval_model,
+                                    data_loaders['test'],
+                                    train_region,
+                                    test_region
+                                )
+
+                            result['seed_id'] = seed_id
+                            result['transfer_type'] = transfer_type
+                            seed_results.append(result)
+                            results.append(result)
+
+                            # Free GPU memory after evaluation
+                            if transfer_type == 'few-shot' and model_type == 'anp' and eval_model is not model:
+                                del eval_model
+
+                            # Move PyTorch model back to CPU to free GPU memory
+                            if model_type == 'anp':
+                                model.cpu()
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+
+                        # Compute aggregated statistics across seeds for this transfer type
+                        if len(seed_results) > 1:
+                            aggregated = self._aggregate_seed_results(
+                                seed_results, train_region, test_region, model_type, transfer_type
                             )
-
-                        result['seed_id'] = seed_id
-                        seed_results.append(result)
-                        results.append(result)
-
-                    # Compute aggregated statistics across seeds
-                    if len(seed_results) > 1:
-                        aggregated = self._aggregate_seed_results(
-                            seed_results, train_region, test_region, model_type
-                        )
-                        results.append(aggregated)
+                            results.append(aggregated)
 
         df = pd.DataFrame(results)
 
@@ -488,16 +783,19 @@ class SpatialExtrapolationEvaluator:
         seed_results: List[dict],
         train_region: str,
         test_region: str,
-        model_type: str
+        model_type: str,
+        transfer_type: str = 'zero-shot'
     ) -> dict:
         """Aggregate results across seeds for a given train-test region pair."""
         metric_keys = ['log_rmse', 'log_mae', 'log_r2', 'mean_uncertainty',
-                       'coverage_1sigma', 'coverage_2sigma', 'coverage_3sigma']
+                       'coverage_1sigma', 'coverage_2sigma', 'coverage_3sigma',
+                       'z_score_mean', 'z_score_std']
 
         aggregated = {
             'train_region': train_region,
             'test_region': test_region,
             'model_type': model_type,
+            'transfer_type': transfer_type,
             'seed_id': 'mean',
             'num_seeds': len(seed_results)
         }
@@ -528,12 +826,16 @@ class SpatialExtrapolationEvaluator:
         vmax: Optional[float] = None,
         reverse_cmap: bool = False,
         ax: Optional[plt.Axes] = None,
-        show_std: bool = True
+        show_std: bool = True,
+        center: Optional[float] = None,
+        simple_title: bool = False
     ) -> plt.Axes:
         """Create heatmap using aggregated (mean) results across seeds.
 
         Args:
             show_std: If True and std data is available, annotate cells with mean ± std
+            center: If provided, centers the colormap at this value (useful for diverging colormaps)
+            simple_title: If True, only show model type (e.g., "ANP" instead of "ANP: metric_name")
         """
         # Filter for aggregated results (seed_id == 'mean')
         df_model = df[df['model_type'] == model_type]
@@ -569,8 +871,8 @@ class SpatialExtrapolationEvaluator:
                 values=std_col
             ).reindex(index=REGION_ORDER, columns=REGION_ORDER)
 
-            # Format: mean ± std
-            annot_matrix = matrix.copy()
+            # Format: mean ± std (convert to object dtype to avoid FutureWarning)
+            annot_matrix = matrix.copy().astype(object)
             for i, train_reg in enumerate(REGION_ORDER):
                 for j, test_reg in enumerate(REGION_ORDER):
                     mean_val = matrix.loc[train_reg, test_reg]
@@ -580,35 +882,55 @@ class SpatialExtrapolationEvaluator:
                     elif pd.notna(mean_val):
                         annot_matrix.loc[train_reg, test_reg] = f'{mean_val:.3f}'
 
-            sns.heatmap(
-                matrix,
-                annot=annot_matrix,
-                fmt='',
-                cmap=cmap,
-                vmin=vmin,
-                vmax=vmax,
-                cbar_kws={'label': metric_name},
-                ax=ax,
-                linewidths=0.5,
-                linecolor='gray'
-            )
+            # Build heatmap kwargs
+            heatmap_kwargs = {
+                'annot': annot_matrix,
+                'fmt': '',
+                'cmap': cmap,
+                'vmin': vmin,
+                'vmax': vmax,
+                'cbar_kws': {'label': metric_name},
+                'ax': ax,
+                'linewidths': 0.5,
+                'linecolor': 'gray'
+            }
+            if center is not None:
+                heatmap_kwargs['center'] = center
+
+            sns.heatmap(matrix, **heatmap_kwargs)
         else:
-            sns.heatmap(
-                matrix,
-                annot=True,
-                fmt='.3f',
-                cmap=cmap,
-                vmin=vmin,
-                vmax=vmax,
-                cbar_kws={'label': metric_name},
-                ax=ax,
-                linewidths=0.5,
-                linecolor='gray'
-            )
+            # Build heatmap kwargs
+            heatmap_kwargs = {
+                'annot': True,
+                'fmt': '.3f',
+                'cmap': cmap,
+                'vmin': vmin,
+                'vmax': vmax,
+                'cbar_kws': {'label': metric_name},
+                'ax': ax,
+                'linewidths': 0.5,
+                'linecolor': 'gray'
+            }
+            if center is not None:
+                heatmap_kwargs['center'] = center
+
+            sns.heatmap(matrix, **heatmap_kwargs)
 
         ax.set_xlabel('Test Region', fontsize=12)
         ax.set_ylabel('Train Region', fontsize=12)
-        title = f'{model_type.upper()}: {metric_name}'
+
+        # Create title based on simple_title flag
+        if simple_title:
+            # Just show model type (e.g., "ANP" or "XGBoost")
+            title = model_type.upper() if model_type != 'xgboost' else 'XGBoost'
+        elif metric_name in ['Zero-Shot', 'Few-Shot']:
+            # For comparison plots, just show model type
+            title = model_type.upper() if model_type != 'xgboost' else 'XGBoost'
+        else:
+            # Show full title
+            model_label = model_type.upper() if model_type != 'xgboost' else 'XGBoost'
+            title = f'{model_label}: {metric_name}'
+
         if show_std and std_col in df_mean.columns:
             title += ' (Mean ± Std across seeds)'
         ax.set_title(title, fontsize=14, fontweight='bold')
@@ -623,33 +945,55 @@ class SpatialExtrapolationEvaluator:
         metric: str,
         metric_name: str,
         cmap: str = 'RdYlGn',
-        reverse_cmap: bool = False
+        reverse_cmap: bool = False,
+        center: Optional[float] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None
     ) -> plt.Figure:
+        """Create comparison heatmap with 1x2 layout (for single metric comparison).
+
+        Args:
+            center: If provided, centers the colormap at this value (for diverging colormaps)
+            vmin: Optional pre-computed minimum value for colormap scale
+            vmax: Optional pre-computed maximum value for colormap scale
+        """
         fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
-        # Filter for mean results to compute shared vmin/vmax
-        if 'seed_id' in df.columns:
-            df_mean = df[df['seed_id'] == 'mean']
-            if len(df_mean) == 0:
+        # Only compute vmin/vmax if not provided
+        if vmin is None or vmax is None:
+            # Filter for mean results to compute shared vmin/vmax
+            if 'seed_id' in df.columns:
+                df_mean = df[df['seed_id'] == 'mean']
+                if len(df_mean) == 0:
+                    df_mean = df
+            else:
                 df_mean = df
-        else:
-            df_mean = df
 
-        vmin = df_mean[metric].min()
-        vmax = df_mean[metric].max()
+            if center is not None:
+                # For diverging colormap centered at a value
+                vmax_abs = max(abs(df_mean[metric].min() - center), abs(df_mean[metric].max() - center))
+                vmin = center - vmax_abs
+                vmax = center + vmax_abs
+                # Cap R² at ±1 since it cannot exceed these bounds
+                if metric == 'log_r2':
+                    vmin = max(vmin, -1.0)
+                    vmax = min(vmax, 1.0)
+            else:
+                vmin = df_mean[metric].min()
+                vmax = df_mean[metric].max()
 
         # ANP heatmap
         self.create_heatmap(
             df, 'anp', metric, metric_name,
             cmap=cmap, vmin=vmin, vmax=vmax, reverse_cmap=reverse_cmap,
-            ax=axes[0]
+            ax=axes[0], center=center, simple_title=True
         )
 
         # XGBoost heatmap
         self.create_heatmap(
             df, 'xgboost', metric, metric_name,
             cmap=cmap, vmin=vmin, vmax=vmax, reverse_cmap=reverse_cmap,
-            ax=axes[1]
+            ax=axes[1], center=center, simple_title=True
         )
 
         plt.suptitle(f'Spatial Extrapolation: {metric_name}', fontsize=16, fontweight='bold', y=0.98)
@@ -657,42 +1001,213 @@ class SpatialExtrapolationEvaluator:
 
         return fig
 
+    def create_2x2_comparison_grid(
+        self,
+        df: pd.DataFrame,
+        metrics: List[Tuple[str, str, str, bool]],
+        title: str = 'Spatial Extrapolation Results',
+        center_values: Optional[List[Optional[float]]] = None
+    ) -> plt.Figure:
+        """Create 2x2 grid comparing ANP and XGBoost on two metrics.
+
+        Args:
+            df: DataFrame with results
+            metrics: List of (metric_key, metric_name, cmap, reverse_cmap) tuples for the two metrics
+            title: Overall figure title
+            center_values: Optional list of center values for each metric's colormap
+        """
+        if len(metrics) != 2:
+            raise ValueError("Must provide exactly 2 metrics for 2x2 grid")
+
+        if center_values is None:
+            center_values = [None, None]
+
+        fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+
+        # Filter for mean results
+        if 'seed_id' in df.columns:
+            df_mean = df[df['seed_id'] == 'mean']
+            if len(df_mean) == 0:
+                df_mean = df
+        else:
+            df_mean = df
+
+        # Create heatmaps for each metric
+        for i, ((metric, metric_name, cmap, reverse_cmap), center) in enumerate(zip(metrics, center_values)):
+            # Compute vmin/vmax for this metric
+            if center is not None:
+                # For diverging colormap centered at a value
+                vmax_abs = max(abs(df_mean[metric].min() - center), abs(df_mean[metric].max() - center))
+                vmin = center - vmax_abs
+                vmax = center + vmax_abs
+                # Cap R² at ±1 since it cannot exceed these bounds
+                if metric == 'log_r2':
+                    vmin = max(vmin, -1.0)
+                    vmax = min(vmax, 1.0)
+            else:
+                vmin = df_mean[metric].min()
+                vmax = df_mean[metric].max()
+
+            # ANP heatmap (left column)
+            self.create_heatmap(
+                df, 'anp', metric, metric_name,
+                cmap=cmap, vmin=vmin, vmax=vmax, reverse_cmap=reverse_cmap,
+                ax=axes[i, 0], center=center
+            )
+
+            # XGBoost heatmap (right column)
+            self.create_heatmap(
+                df, 'xgboost', metric, metric_name,
+                cmap=cmap, vmin=vmin, vmax=vmax, reverse_cmap=reverse_cmap,
+                ax=axes[i, 1], center=center
+            )
+
+        plt.suptitle(title, fontsize=18, fontweight='bold', y=0.995)
+        plt.tight_layout(rect=[0, 0, 1, 0.99])
+
+        return fig
+
     def visualize_results(self, df: pd.DataFrame):
         logger.info("\nCreating visualizations...")
 
-        # R2 comparison
-        fig = self.create_comparison_heatmap(
-            df, 'log_r2', 'Log R²', cmap='RdYlGn', reverse_cmap=False
-        )
-        fig.savefig(self.output_dir / 'extrapolation_r2.png', dpi=300, bbox_inches='tight')
-        plt.close(fig)
-        logger.info("Saved R² comparison")
+        # Check if we have both zero-shot and few-shot results
+        has_transfer_type = 'transfer_type' in df.columns
+        if has_transfer_type:
+            transfer_types = df['transfer_type'].unique()
+            has_zeroshot = 'zero-shot' in transfer_types
+            has_fewshot = 'few-shot' in transfer_types
+        else:
+            has_zeroshot = True
+            has_fewshot = False
+            # Add default transfer_type for backward compatibility
+            df = df.copy()
+            df['transfer_type'] = 'zero-shot'
 
-        # RMSE comparison
-        fig = self.create_comparison_heatmap(
-            df, 'log_rmse', 'Log RMSE', cmap='RdYlGn', reverse_cmap=True
-        )
-        fig.savefig(self.output_dir / 'extrapolation_rmse.png', dpi=300, bbox_inches='tight')
-        plt.close(fig)
-        logger.info("Saved RMSE comparison")
+        # Get mean results for computing shared scales
+        if 'seed_id' in df.columns:
+            df_mean = df[df['seed_id'] == 'mean']
+            if len(df_mean) == 0:
+                df_mean = df
+        else:
+            df_mean = df
 
-        # Coverage comparison
-        if 'coverage_1sigma' in df.columns:
-            fig = self.create_comparison_heatmap(
-                df, 'coverage_1sigma', '1σ Coverage', cmap='RdYlGn', reverse_cmap=False
-            )
-            fig.savefig(self.output_dir / 'extrapolation_coverage.png', dpi=300, bbox_inches='tight')
+        # Compute shared scales across ALL transfer types (zero-shot and few-shot)
+        # This ensures direct comparability between plots
+
+        # R² scale: centered at 0, symmetric, capped at ±1
+        r2_max_abs = max(abs(df_mean['log_r2'].min()), abs(df_mean['log_r2'].max()))
+        shared_r2_vmin, shared_r2_vmax = max(-r2_max_abs, -1.0), min(r2_max_abs, 1.0)
+
+        # RMSE scale: min to max
+        shared_rmse_vmin = df_mean['log_rmse'].min()
+        shared_rmse_vmax = df_mean['log_rmse'].max()
+
+        # Z-score std scale: centered at 1.0, symmetric (divergent)
+        shared_z_std_vmin, shared_z_std_vmax = None, None
+        if 'z_score_std' in df_mean.columns and df_mean['z_score_std'].notna().any():
+            df_mean_calib = df_mean[df_mean['z_score_std'].notna()]
+            z_std_max_abs = max(abs(df_mean_calib['z_score_std'].min() - 1.0),
+                               abs(df_mean_calib['z_score_std'].max() - 1.0))
+            shared_z_std_vmin, shared_z_std_vmax = 1.0 - z_std_max_abs, 1.0 + z_std_max_abs
+
+        # If we have both zero-shot and few-shot, create comparison visualizations
+        if has_zeroshot and has_fewshot:
+            logger.info("Creating zero-shot vs few-shot comparisons...")
+
+            # Create 2x2 grid: zero-shot R² | few-shot R²
+            #                   zero-shot RMSE | few-shot RMSE
+            fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+
+            df_zero = df[df['transfer_type'] == 'zero-shot']
+            df_few = df[df['transfer_type'] == 'few-shot']
+
+            # R² comparisons (row 0) - using shared scales
+            self.create_heatmap(df_zero, 'anp', 'log_r2', 'Zero-Shot',
+                               cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
+                               ax=axes[0, 0], center=0.0, simple_title=True)
+            self.create_heatmap(df_few, 'anp', 'log_r2', 'Few-Shot',
+                               cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
+                               ax=axes[0, 1], center=0.0, simple_title=True)
+
+            # RMSE comparisons (row 1) - using shared scales
+            self.create_heatmap(df_zero, 'anp', 'log_rmse', 'Zero-Shot',
+                               cmap='RdYlGn_r', vmin=shared_rmse_vmin, vmax=shared_rmse_vmax,
+                               ax=axes[1, 0], simple_title=True)
+            self.create_heatmap(df_few, 'anp', 'log_rmse', 'Few-Shot',
+                               cmap='RdYlGn_r', vmin=shared_rmse_vmin, vmax=shared_rmse_vmax,
+                               ax=axes[1, 1], simple_title=True)
+
+            plt.suptitle('Zero-Shot vs Few-Shot Transfer', fontsize=18, fontweight='bold', y=0.995)
+            plt.tight_layout(rect=[0, 0, 1, 0.99])
+            fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot.png', dpi=300, bbox_inches='tight')
             plt.close(fig)
-            logger.info("Saved coverage comparison")
+            logger.info("Saved zero-shot vs few-shot comparison")
 
-        # 4. Mean uncertainty comparison
-        if 'mean_uncertainty' in df.columns:
+            # Also create z-score std comparison if available (calibration metric)
+            if 'z_score_std' in df.columns and df['z_score_std'].notna().any():
+                fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+                # Filter to only include rows with valid z_score_std
+                df_zero_calib = df_zero[df_zero['z_score_std'].notna()].copy()
+                df_few_calib = df_few[df_few['z_score_std'].notna()].copy()
+
+                if len(df_zero_calib) == 0 or len(df_few_calib) == 0:
+                    logger.warning("Skipping z-score std comparison: insufficient data")
+                    plt.close(fig)
+                else:
+                    # Z-score std comparisons (centered at 1 = perfect calibration)
+                    # Using shared scales computed above
+                    self.create_heatmap(df_zero_calib, 'anp', 'z_score_std', 'Zero-Shot',
+                                       cmap='RdYlGn', vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
+                                       ax=axes[0], center=1.0, simple_title=True)
+                    self.create_heatmap(df_few_calib, 'anp', 'z_score_std', 'Few-Shot',
+                                       cmap='RdYlGn', vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
+                                       ax=axes[1], center=1.0, simple_title=True)
+
+                    plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std, 1.0 = Perfect)',
+                               fontsize=18, fontweight='bold', y=0.98)
+                    plt.tight_layout(rect=[0, 0, 1, 0.96])
+                    fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_calibration.png', dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    logger.info("Saved zero-shot vs few-shot calibration comparison")
+            else:
+                logger.warning("Skipping z-score std comparison: metric not available in results")
+
+        # Create visualizations for each transfer type (using same shared scales for comparability)
+        for transfer_type in (['zero-shot'] if has_zeroshot else []) + (['few-shot'] if has_fewshot else []):
+            df_transfer = df[df['transfer_type'] == transfer_type]
+            suffix = f"_{transfer_type.replace('-', '')}"
+
+            # R² comparison with centered colormap (using shared scales)
             fig = self.create_comparison_heatmap(
-                df, 'mean_uncertainty', 'Mean Uncertainty (σ)', cmap='YlOrRd', reverse_cmap=False
+                df_transfer, 'log_r2', f'Log R² ({transfer_type.title()})',
+                cmap='RdYlGn', reverse_cmap=False, center=0.0,
+                vmin=shared_r2_vmin, vmax=shared_r2_vmax
             )
-            fig.savefig(self.output_dir / 'extrapolation_uncertainty.png', dpi=300, bbox_inches='tight')
+            fig.savefig(self.output_dir / f'extrapolation_r2{suffix}.png', dpi=300, bbox_inches='tight')
             plt.close(fig)
-            logger.info("Saved uncertainty comparison")
+            logger.info(f"Saved R² comparison ({transfer_type})")
+
+            # RMSE comparison (using shared scales)
+            fig = self.create_comparison_heatmap(
+                df_transfer, 'log_rmse', f'Log RMSE ({transfer_type.title()})',
+                cmap='RdYlGn', reverse_cmap=True,
+                vmin=shared_rmse_vmin, vmax=shared_rmse_vmax
+            )
+            fig.savefig(self.output_dir / f'extrapolation_rmse{suffix}.png', dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            logger.info(f"Saved RMSE comparison ({transfer_type})")
+
+            # Z-score std comparison (calibration) if available (using shared scales)
+            if 'z_score_std' in df_transfer.columns and shared_z_std_vmin is not None:
+                fig = self.create_comparison_heatmap(
+                    df_transfer, 'z_score_std', f'Z-Score Std ({transfer_type.title()})',
+                    cmap='RdYlGn', reverse_cmap=False, center=1.0,
+                    vmin=shared_z_std_vmin, vmax=shared_z_std_vmax
+                )
+                fig.savefig(self.output_dir / f'extrapolation_calibration{suffix}.png', dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                logger.info(f"Saved calibration comparison ({transfer_type})")
 
         self.create_summary_table(df)
 
@@ -710,13 +1225,23 @@ class SpatialExtrapolationEvaluator:
         df_mean['is_diagonal'] = df_mean['train_region'] == df_mean['test_region']
         df_mean['split'] = df_mean['is_diagonal'].map({True: 'In-Distribution', False: 'Out-of-Distribution'})
 
+        # Group by transfer_type if available
+        group_cols = ['model_type', 'split']
+        if 'transfer_type' in df_mean.columns:
+            group_cols.insert(1, 'transfer_type')
+
         # For mean results, we already have std columns, so just report means
-        summary = df_mean.groupby(['model_type', 'split']).agg({
+        agg_dict = {
             'log_r2': ['mean'],
             'log_rmse': ['mean'],
             'coverage_1sigma': ['mean'],
             'mean_uncertainty': ['mean']
-        }).round(3)
+        }
+        # Add z_score_std if available
+        if 'z_score_std' in df_mean.columns:
+            agg_dict['z_score_std'] = ['mean']
+
+        summary = df_mean.groupby(group_cols).agg(agg_dict).round(3)
 
         output_path = self.output_dir / 'extrapolation_summary.csv'
         summary.to_csv(output_path)
@@ -749,12 +1274,28 @@ class SpatialExtrapolationEvaluator:
 
         results = []
 
-        for model_type in df['model_type'].unique():
-            df_model = df[df['model_type'] == model_type]
+        # Group by model_type and optionally transfer_type
+        group_cols = ['model_type']
+        if 'transfer_type' in df.columns:
+            group_cols.append('transfer_type')
+            groups = df.groupby(group_cols)
+        else:
+            groups = [(mt, df[df['model_type'] == mt]) for mt in df['model_type'].unique()]
+            groups = [((mt,), g) for mt, g in groups]
 
-            df_in = df_model[df_model['is_diagonal']]
+        for group_key, df_group in groups:
+            if isinstance(group_key, tuple):
+                if len(group_key) == 2:
+                    model_type, transfer_type = group_key
+                else:
+                    model_type = group_key[0]
+                    transfer_type = None
+            else:
+                model_type = group_key
+                transfer_type = None
 
-            df_out = df_model[~df_model['is_diagonal']]
+            df_in = df_group[df_group['is_diagonal']]
+            df_out = df_group[~df_group['is_diagonal']]
 
             degradation = {
                 'model_type': model_type,
@@ -767,6 +1308,9 @@ class SpatialExtrapolationEvaluator:
                 'coverage_drop': df_in['coverage_1sigma'].mean() - df_out['coverage_1sigma'].mean(),
                 'coverage_drop_pct': ((df_in['coverage_1sigma'].mean() - df_out['coverage_1sigma'].mean()) / df_in['coverage_1sigma'].mean() * 100)
             }
+
+            if transfer_type is not None:
+                degradation['transfer_type'] = transfer_type
 
             results.append(degradation)
 
@@ -827,10 +1371,45 @@ Examples:
     )
 
     parser.add_argument(
-        '--num_context',
+        '--context_ratio',
+        type=float,
+        default=0.5,
+        help='Ratio of context/target split within each tile (default: 0.5)'
+    )
+
+    parser.add_argument(
+        '--few_shot_tiles',
         type=int,
-        default=100,
-        help='Number of context points for ANP (default: 100)'
+        default=None,
+        help='Number of tiles from target region for few-shot fine-tuning. If not specified, only zero-shot is performed.'
+    )
+
+    parser.add_argument(
+        '--few_shot_epochs',
+        type=int,
+        default=5,
+        help='Number of epochs for few-shot fine-tuning (default: 5)'
+    )
+
+    parser.add_argument(
+        '--few_shot_lr',
+        type=float,
+        default=1e-4,
+        help='Learning rate for few-shot fine-tuning (default: 1e-4)'
+    )
+
+    parser.add_argument(
+        '--few_shot_batch_size',
+        type=int,
+        default=None,
+        help='Batch size for few-shot fine-tuning. If not specified, uses batch_size // 4 for memory efficiency'
+    )
+
+    parser.add_argument(
+        '--include_zero_shot',
+        action='store_true',
+        default=False,
+        help='If set along with --few_shot_tiles, evaluate both zero-shot and few-shot'
     )
 
     parser.add_argument(
@@ -858,8 +1437,13 @@ def main():
         results_dir=Path(args.results_dir),
         output_dir=Path(args.output_dir),
         device=args.device,
-        num_context=args.num_context,
-        batch_size=args.batch_size
+        context_ratio=args.context_ratio,
+        batch_size=args.batch_size,
+        few_shot_tiles=args.few_shot_tiles,
+        few_shot_epochs=args.few_shot_epochs,
+        few_shot_lr=args.few_shot_lr,
+        few_shot_batch_size=args.few_shot_batch_size,
+        include_zero_shot=args.include_zero_shot
     )
 
     logger.info("\nStarting spatial extrapolation cross-evaluation...")
