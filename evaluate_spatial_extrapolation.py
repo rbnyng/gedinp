@@ -1118,19 +1118,17 @@ class SpatialExtrapolationEvaluator:
         shared_rmse_vmin = df_mean['log_rmse'].min()
         shared_rmse_vmax = df_mean['log_rmse'].max()
 
-        # Z-score std scale: centered at 1.0, symmetric (divergent)
+        # Z-score std scale: centered at 1.0, clamped to ±2 range
         shared_z_std_vmin, shared_z_std_vmax = None, None
         if 'z_score_std' in df_mean.columns and df_mean['z_score_std'].notna().any():
-            df_mean_calib = df_mean[df_mean['z_score_std'].notna()]
-            z_std_max_abs = max(abs(df_mean_calib['z_score_std'].min() - 1.0),
-                               abs(df_mean_calib['z_score_std'].max() - 1.0))
-            shared_z_std_vmin, shared_z_std_vmax = 1.0 - z_std_max_abs, 1.0 + z_std_max_abs
+            # Clamp to ±2 range (vmin = -1, vmax = 3, center = 1)
+            shared_z_std_vmin, shared_z_std_vmax = -1.0, 3.0
 
-        # 1 sigma coverage scale: 0 to 1 (or min to max if more restricted)
+        # 1 sigma coverage scale: natural scale (0 to max, higher is better)
         shared_cov1_vmin, shared_cov1_vmax = None, None
         if 'coverage_1sigma' in df_mean.columns and df_mean['coverage_1sigma'].notna().any():
-            shared_cov1_vmin = max(0.0, df_mean['coverage_1sigma'].min())
-            shared_cov1_vmax = min(1.0, df_mean['coverage_1sigma'].max())
+            shared_cov1_vmin = 0.0
+            shared_cov1_vmax = df_mean['coverage_1sigma'].max()
 
         # If we have both zero-shot and few-shot, create comparison visualizations
         if has_zeroshot and has_fewshot:
@@ -1217,6 +1215,71 @@ class SpatialExtrapolationEvaluator:
                 fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_coverage.png', dpi=300, bbox_inches='tight')
                 plt.close(fig)
                 logger.info("Saved zero-shot vs few-shot coverage comparison")
+
+            # Create 3x2 grid for zero-shot (ANP vs XGBoost) across 3 metrics
+            logger.info("Creating 3x2 zero-shot comprehensive comparison...")
+            fig, axes = plt.subplots(3, 2, figsize=(16, 21))
+
+            custom_cmap = create_centered_diverging_colormap()
+
+            # Row 0: 1-sigma coverage
+            self.create_heatmap(df_zero, 'anp', 'coverage_1sigma', '1-Sigma Coverage',
+                               cmap='RdYlGn', vmin=shared_cov1_vmin, vmax=shared_cov1_vmax,
+                               ax=axes[0, 0], simple_title=True)
+            self.create_heatmap(df_zero, 'xgboost', 'coverage_1sigma', '1-Sigma Coverage',
+                               cmap='RdYlGn', vmin=shared_cov1_vmin, vmax=shared_cov1_vmax,
+                               ax=axes[0, 1], simple_title=True)
+
+            # Row 1: Z-score std (calibration)
+            if 'z_score_std' in df_zero.columns and df_zero['z_score_std'].notna().any():
+                df_zero_calib = df_zero[df_zero['z_score_std'].notna()].copy()
+                self.create_heatmap(df_zero_calib, 'anp', 'z_score_std', 'Z-Score Std (1.0 = Perfect)',
+                                   cmap=custom_cmap, vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
+                                   ax=axes[1, 0], center=1.0, simple_title=True)
+                self.create_heatmap(df_zero_calib, 'xgboost', 'z_score_std', 'Z-Score Std (1.0 = Perfect)',
+                                   cmap=custom_cmap, vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
+                                   ax=axes[1, 1], center=1.0, simple_title=True)
+
+            # Row 2: R²
+            self.create_heatmap(df_zero, 'anp', 'log_r2', 'Log R²',
+                               cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
+                               ax=axes[2, 0], center=0.0, simple_title=True)
+            self.create_heatmap(df_zero, 'xgboost', 'log_r2', 'Log R²',
+                               cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
+                               ax=axes[2, 1], center=0.0, simple_title=True)
+
+            plt.suptitle('Zero-Shot Transfer: Comprehensive Comparison', fontsize=18, fontweight='bold', y=0.995)
+            plt.tight_layout(rect=[0, 0, 1, 0.99])
+            fig.savefig(self.output_dir / 'extrapolation_zeroshot_3x2_comprehensive.png', dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            logger.info("Saved 3x2 zero-shot comprehensive comparison")
+
+            # Create 1x3 grid for few-shot (ANP only) across 3 metrics
+            logger.info("Creating 1x3 few-shot ANP comparison...")
+            fig, axes = plt.subplots(1, 3, figsize=(24, 7))
+
+            # Column 0: 1-sigma coverage
+            self.create_heatmap(df_few, 'anp', 'coverage_1sigma', '1-Sigma Coverage',
+                               cmap='RdYlGn', vmin=shared_cov1_vmin, vmax=shared_cov1_vmax,
+                               ax=axes[0], simple_title=False)
+
+            # Column 1: Z-score std (calibration)
+            if 'z_score_std' in df_few.columns and df_few['z_score_std'].notna().any():
+                df_few_calib = df_few[df_few['z_score_std'].notna()].copy()
+                self.create_heatmap(df_few_calib, 'anp', 'z_score_std', 'Z-Score Std (1.0 = Perfect)',
+                                   cmap=custom_cmap, vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
+                                   ax=axes[1], center=1.0, simple_title=False)
+
+            # Column 2: R²
+            self.create_heatmap(df_few, 'anp', 'log_r2', 'Log R²',
+                               cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
+                               ax=axes[2], center=0.0, simple_title=False)
+
+            plt.suptitle('Few-Shot Transfer: ANP Performance Across Metrics', fontsize=18, fontweight='bold', y=0.98)
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            fig.savefig(self.output_dir / 'extrapolation_fewshot_1x3_anp.png', dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            logger.info("Saved 1x3 few-shot ANP comparison")
 
         # Create visualizations for each transfer type (using same shared scales for comparability)
         for transfer_type in (['zero-shot'] if has_zeroshot else []) + (['few-shot'] if has_fewshot else []):
