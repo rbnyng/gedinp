@@ -436,10 +436,10 @@ class SpatialExtrapolationEvaluator:
 
             for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.few_shot_epochs}", leave=False):
                 optimizer.zero_grad()
-                batch_loss = 0.0
+                tile_losses = []
                 n_tiles = len(batch['context_coords'])
 
-                # Accumulate loss across all tiles in the batch
+                # Collect losses from all tiles in the batch
                 for i in range(n_tiles):
                     context_coords = batch['context_coords'][i].to(self.device)
                     context_embeddings = batch['context_embeddings'][i].to(self.device)
@@ -462,12 +462,17 @@ class SpatialExtrapolationEvaluator:
 
                     # Total loss (reconstruction + KL divergence for probabilistic models)
                     if kl_loss is not None:
+                        # Ensure KL loss is also a scalar
+                        if kl_loss.numel() > 1:
+                            kl_loss = kl_loss.mean()
                         tile_loss = recon_loss + 0.01 * kl_loss  # Small weight on KL
                     else:
                         tile_loss = recon_loss
 
-                    # Accumulate loss across tiles (average over tiles in batch)
-                    batch_loss = batch_loss + tile_loss / n_tiles
+                    tile_losses.append(tile_loss)
+
+                # Average loss across tiles in the batch
+                batch_loss = torch.stack(tile_losses).mean()
 
                 # Backprop and update once per batch
                 batch_loss.backward()
