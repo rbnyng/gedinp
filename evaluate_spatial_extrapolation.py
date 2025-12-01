@@ -1252,32 +1252,32 @@ class SpatialExtrapolationEvaluator:
             plt.close(fig)
             logger.info("Saved 3x2 zero-shot comprehensive comparison")
 
-            # Create 1x3 grid for few-shot (ANP only) across 3 metrics
-            logger.info("Creating 1x3 few-shot ANP comparison...")
-            fig, axes = plt.subplots(1, 3, figsize=(24, 7))
+            # Create 3x1 grid for few-shot (ANP only) across 3 metrics
+            logger.info("Creating 3x1 few-shot ANP comparison...")
+            fig, axes = plt.subplots(3, 1, figsize=(8, 21))
 
-            # Column 0: 1-sigma coverage
+            # Row 0: 1-sigma coverage
             self.create_heatmap(df_few, 'anp', 'coverage_1sigma', '1-Sigma Coverage',
                                cmap='RdYlGn', vmin=shared_cov1_vmin, vmax=shared_cov1_vmax,
                                ax=axes[0], simple_title=False)
 
-            # Column 1: Z-score std (calibration)
+            # Row 1: Z-score std (calibration)
             if 'z_score_std' in df_few.columns and df_few['z_score_std'].notna().any():
                 df_few_calib = df_few[df_few['z_score_std'].notna()].copy()
                 self.create_heatmap(df_few_calib, 'anp', 'z_score_std', 'Z-Score Std (1.0 = Perfect)',
                                    cmap=custom_cmap, vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
                                    ax=axes[1], center=1.0, simple_title=False)
 
-            # Column 2: R²
+            # Row 2: R²
             self.create_heatmap(df_few, 'anp', 'log_r2', 'Log R²',
                                cmap='RdYlGn', vmin=shared_r2_vmin, vmax=shared_r2_vmax,
                                ax=axes[2], center=0.0, simple_title=False)
 
-            plt.suptitle('ANP Few-Shot Fine Tuning Performance', fontsize=18, fontweight='bold', y=0.98)
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
-            fig.savefig(self.output_dir / 'extrapolation_fewshot_1x3_anp.png', dpi=600, bbox_inches='tight')
+            plt.suptitle('ANP Few-Shot Fine Tuning Performance', fontsize=18, fontweight='bold', y=0.995)
+            plt.tight_layout(rect=[0, 0, 1, 0.99])
+            fig.savefig(self.output_dir / 'extrapolation_fewshot_3x1_anp.png', dpi=600, bbox_inches='tight')
             plt.close(fig)
-            logger.info("Saved 1x3 few-shot ANP comparison")
+            logger.info("Saved 3x1 few-shot ANP comparison")
 
         # Create visualizations for each transfer type (using same shared scales for comparability)
         for transfer_type in (['zero-shot'] if has_zeroshot else []) + (['few-shot'] if has_fewshot else []):
