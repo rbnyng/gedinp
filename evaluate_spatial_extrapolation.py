@@ -422,7 +422,14 @@ class SpatialExtrapolationEvaluator:
             Fine-tuned model
         """
         # Create a copy of the model for fine-tuning
-        fine_tuned_model = copy.deepcopy(model)
+        # Move to CPU first to avoid duplicating GPU memory usage
+        original_device = next(model.parameters()).device
+        model_cpu = model.cpu()
+        fine_tuned_model = copy.deepcopy(model_cpu)
+
+        # Move models back to their devices
+        model.to(original_device)  # Original model back to its device
+        fine_tuned_model.to(self.device)  # Fine-tuned copy to GPU
         fine_tuned_model.train()
 
         # Setup optimizer
@@ -716,6 +723,12 @@ class SpatialExtrapolationEvaluator:
                             result['transfer_type'] = transfer_type
                             seed_results.append(result)
                             results.append(result)
+
+                            # Free GPU memory if we created a fine-tuned model
+                            if transfer_type == 'few-shot' and model_type == 'anp' and eval_model is not model:
+                                del eval_model
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
 
                         # Compute aggregated statistics across seeds for this transfer type
                         if len(seed_results) > 1:
