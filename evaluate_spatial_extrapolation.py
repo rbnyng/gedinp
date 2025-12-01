@@ -1095,27 +1095,42 @@ class SpatialExtrapolationEvaluator:
             logger.info("Saved zero-shot vs few-shot comparison")
 
             # Also create z-score std comparison if available (calibration metric)
-            if 'z_score_std' in df.columns:
+            if 'z_score_std' in df.columns and df['z_score_std'].notna().any():
                 fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
-                # Compute shared vmin/vmax for z-score std (centered at 1.0)
-                z_std_max_abs = max(abs(df_mean['z_score_std'].min() - 1.0), abs(df_mean['z_score_std'].max() - 1.0))
-                z_std_vmin, z_std_vmax = 1.0 - z_std_max_abs, 1.0 + z_std_max_abs
+                # Filter to only include rows with valid z_score_std
+                df_zero_calib = df_zero[df_zero['z_score_std'].notna()].copy()
+                df_few_calib = df_few[df_few['z_score_std'].notna()].copy()
 
-                # Z-score std comparisons (centered at 1 = perfect calibration)
-                self.create_heatmap(df_zero, 'anp', 'z_score_std', 'ANP Zero-Shot: Z-Score Std',
-                                   cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
-                                   ax=axes[0], center=1.0)
-                self.create_heatmap(df_few, 'anp', 'z_score_std', 'ANP Few-Shot: Z-Score Std',
-                                   cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
-                                   ax=axes[1], center=1.0)
+                if len(df_zero_calib) == 0 or len(df_few_calib) == 0:
+                    logger.warning("Skipping z-score std comparison: insufficient data")
+                    plt.close(fig)
+                else:
+                    # Compute shared vmin/vmax for z-score std (centered at 1.0)
+                    df_mean_calib = pd.concat([df_zero_calib, df_few_calib])
+                    if 'seed_id' in df_mean_calib.columns:
+                        df_mean_calib = df_mean_calib[df_mean_calib['seed_id'] == 'mean']
 
-                plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std)',
-                           fontsize=18, fontweight='bold', y=0.98)
-                plt.tight_layout(rect=[0, 0, 1, 0.96])
-                fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_calibration.png', dpi=300, bbox_inches='tight')
-                plt.close(fig)
-                logger.info("Saved zero-shot vs few-shot calibration comparison")
+                    z_std_max_abs = max(abs(df_mean_calib['z_score_std'].min() - 1.0),
+                                       abs(df_mean_calib['z_score_std'].max() - 1.0))
+                    z_std_vmin, z_std_vmax = 1.0 - z_std_max_abs, 1.0 + z_std_max_abs
+
+                    # Z-score std comparisons (centered at 1 = perfect calibration)
+                    self.create_heatmap(df_zero_calib, 'anp', 'z_score_std', 'ANP Zero-Shot: Z-Score Std',
+                                       cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
+                                       ax=axes[0], center=1.0)
+                    self.create_heatmap(df_few_calib, 'anp', 'z_score_std', 'ANP Few-Shot: Z-Score Std',
+                                       cmap='RdYlGn', vmin=z_std_vmin, vmax=z_std_vmax,
+                                       ax=axes[1], center=1.0)
+
+                    plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std, 1.0 = Perfect)',
+                               fontsize=18, fontweight='bold', y=0.98)
+                    plt.tight_layout(rect=[0, 0, 1, 0.96])
+                    fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_calibration.png', dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    logger.info("Saved zero-shot vs few-shot calibration comparison")
+            else:
+                logger.warning("Skipping z-score std comparison: metric not available in results")
 
         # Create visualizations for each transfer type
         for transfer_type in (['zero-shot'] if has_zeroshot else []) + (['few-shot'] if has_fewshot else []):
