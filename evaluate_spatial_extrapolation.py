@@ -856,8 +856,8 @@ class SpatialExtrapolationEvaluator:
                 values=std_col
             ).reindex(index=REGION_ORDER, columns=REGION_ORDER)
 
-            # Format: mean ± std
-            annot_matrix = matrix.copy()
+            # Format: mean ± std (convert to object dtype to avoid FutureWarning)
+            annot_matrix = matrix.copy().astype(object)
             for i, train_reg in enumerate(REGION_ORDER):
                 for j, test_reg in enumerate(REGION_ORDER):
                     mean_val = matrix.loc[train_reg, test_reg]
@@ -941,6 +941,10 @@ class SpatialExtrapolationEvaluator:
             vmax_abs = max(abs(df_mean[metric].min() - center), abs(df_mean[metric].max() - center))
             vmin = center - vmax_abs
             vmax = center + vmax_abs
+            # Cap R² at ±1 since it cannot exceed these bounds
+            if metric == 'log_r2':
+                vmin = max(vmin, -1.0)
+                vmax = min(vmax, 1.0)
         else:
             vmin = df_mean[metric].min()
             vmax = df_mean[metric].max()
@@ -1003,6 +1007,10 @@ class SpatialExtrapolationEvaluator:
                 vmax_abs = max(abs(df_mean[metric].min() - center), abs(df_mean[metric].max() - center))
                 vmin = center - vmax_abs
                 vmax = center + vmax_abs
+                # Cap R² at ±1 since it cannot exceed these bounds
+                if metric == 'log_r2':
+                    vmin = max(vmin, -1.0)
+                    vmax = min(vmax, 1.0)
             else:
                 vmin = df_mean[metric].min()
                 vmax = df_mean[metric].max()
@@ -1053,13 +1061,14 @@ class SpatialExtrapolationEvaluator:
             df_zero = df[df['transfer_type'] == 'zero-shot']
             df_few = df[df['transfer_type'] == 'few-shot']
 
-            # Compute shared vmin/vmax for R² (centered at 0)
+            # Compute shared vmin/vmax for R² (centered at 0, capped at ±1)
             if 'seed_id' in df.columns:
                 df_mean = df[df['seed_id'] == 'mean']
             else:
                 df_mean = df
             r2_max_abs = max(abs(df_mean['log_r2'].min()), abs(df_mean['log_r2'].max()))
-            r2_vmin, r2_vmax = -r2_max_abs, r2_max_abs
+            # Cap at 1.0 since R² cannot exceed 1.0
+            r2_vmin, r2_vmax = max(-r2_max_abs, -1.0), min(r2_max_abs, 1.0)
 
             # R² comparisons (row 0)
             self.create_heatmap(df_zero, 'anp', 'log_r2', 'ANP Zero-Shot',
