@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -56,6 +57,21 @@ REGIONS = {
 }
 
 REGION_ORDER = ['maine', 'tolima', 'hokkaido', 'sudtirol']
+
+
+def create_centered_diverging_colormap(name='GreenRed'):
+    """Create a custom diverging colormap with green at center and red at extremes.
+
+    This is useful for metrics where a central value (e.g., 1.0) is ideal,
+    and divergence in either direction is undesirable.
+
+    Returns:
+        LinearSegmentedColormap: Custom colormap going Red → Green → Red
+    """
+    colors = ['#d73027', '#fee08b', '#1a9850', '#fee08b', '#d73027']  # Red → Yellow → Green → Yellow → Red
+    n_bins = 256
+    cmap = LinearSegmentedColormap.from_list(name, colors, N=n_bins)
+    return cmap
 
 
 class SpatialExtrapolationEvaluator:
@@ -1110,6 +1126,12 @@ class SpatialExtrapolationEvaluator:
                                abs(df_mean_calib['z_score_std'].max() - 1.0))
             shared_z_std_vmin, shared_z_std_vmax = 1.0 - z_std_max_abs, 1.0 + z_std_max_abs
 
+        # 1 sigma coverage scale: 0 to 1 (or min to max if more restricted)
+        shared_cov1_vmin, shared_cov1_vmax = None, None
+        if 'coverage_1sigma' in df_mean.columns and df_mean['coverage_1sigma'].notna().any():
+            shared_cov1_vmin = max(0.0, df_mean['coverage_1sigma'].min())
+            shared_cov1_vmax = min(1.0, df_mean['coverage_1sigma'].max())
+
         # If we have both zero-shot and few-shot, create comparison visualizations
         if has_zeroshot and has_fewshot:
             logger.info("Creating zero-shot vs few-shot comparisons...")
@@ -1155,13 +1177,16 @@ class SpatialExtrapolationEvaluator:
                     logger.warning("Skipping z-score std comparison: insufficient data")
                     plt.close(fig)
                 else:
+                    # Create custom colormap with green at center (1.0) and red at extremes
+                    custom_cmap = create_centered_diverging_colormap()
+
                     # Z-score std comparisons (centered at 1 = perfect calibration)
                     # Using shared scales computed above
                     self.create_heatmap(df_zero_calib, 'anp', 'z_score_std', 'Zero-Shot',
-                                       cmap='RdYlGn', vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
+                                       cmap=custom_cmap, vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
                                        ax=axes[0], center=1.0, simple_title=True)
                     self.create_heatmap(df_few_calib, 'anp', 'z_score_std', 'Few-Shot',
-                                       cmap='RdYlGn', vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
+                                       cmap=custom_cmap, vmin=shared_z_std_vmin, vmax=shared_z_std_vmax,
                                        ax=axes[1], center=1.0, simple_title=True)
 
                     plt.suptitle('Zero-Shot vs Few-Shot: Uncertainty Calibration (Z-Score Std, 1.0 = Perfect)',
@@ -1172,6 +1197,26 @@ class SpatialExtrapolationEvaluator:
                     logger.info("Saved zero-shot vs few-shot calibration comparison")
             else:
                 logger.warning("Skipping z-score std comparison: metric not available in results")
+
+            # Also create 1 sigma coverage comparison if available
+            if 'coverage_1sigma' in df.columns and df['coverage_1sigma'].notna().any():
+                fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+                # 1 sigma coverage comparisons (0.683 = ideal for normal distribution)
+                # Using shared scales computed above
+                self.create_heatmap(df_zero, 'anp', 'coverage_1sigma', 'Zero-Shot',
+                                   cmap='RdYlGn', vmin=shared_cov1_vmin, vmax=shared_cov1_vmax,
+                                   ax=axes[0], simple_title=True)
+                self.create_heatmap(df_few, 'anp', 'coverage_1sigma', 'Few-Shot',
+                                   cmap='RdYlGn', vmin=shared_cov1_vmin, vmax=shared_cov1_vmax,
+                                   ax=axes[1], simple_title=True)
+
+                plt.suptitle('Zero-Shot vs Few-Shot: 1-Sigma Coverage (68.3% = Ideal)',
+                           fontsize=18, fontweight='bold', y=0.98)
+                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                fig.savefig(self.output_dir / 'extrapolation_zeroshot_vs_fewshot_coverage.png', dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                logger.info("Saved zero-shot vs few-shot coverage comparison")
 
         # Create visualizations for each transfer type (using same shared scales for comparability)
         for transfer_type in (['zero-shot'] if has_zeroshot else []) + (['few-shot'] if has_fewshot else []):
@@ -1200,14 +1245,28 @@ class SpatialExtrapolationEvaluator:
 
             # Z-score std comparison (calibration) if available (using shared scales)
             if 'z_score_std' in df_transfer.columns and shared_z_std_vmin is not None:
+                # Create custom colormap with green at center (1.0) and red at extremes
+                custom_cmap = create_centered_diverging_colormap()
+
                 fig = self.create_comparison_heatmap(
                     df_transfer, 'z_score_std', f'Z-Score Std ({transfer_type.title()})',
-                    cmap='RdYlGn', reverse_cmap=False, center=1.0,
+                    cmap=custom_cmap, reverse_cmap=False, center=1.0,
                     vmin=shared_z_std_vmin, vmax=shared_z_std_vmax
                 )
                 fig.savefig(self.output_dir / f'extrapolation_calibration{suffix}.png', dpi=300, bbox_inches='tight')
                 plt.close(fig)
                 logger.info(f"Saved calibration comparison ({transfer_type})")
+
+            # 1 sigma coverage comparison if available (using shared scales)
+            if 'coverage_1sigma' in df_transfer.columns and shared_cov1_vmin is not None:
+                fig = self.create_comparison_heatmap(
+                    df_transfer, 'coverage_1sigma', f'1-Sigma Coverage ({transfer_type.title()})',
+                    cmap='RdYlGn', reverse_cmap=False,
+                    vmin=shared_cov1_vmin, vmax=shared_cov1_vmax
+                )
+                fig.savefig(self.output_dir / f'extrapolation_coverage_1sigma{suffix}.png', dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                logger.info(f"Saved 1-sigma coverage comparison ({transfer_type})")
 
         self.create_summary_table(df)
 
