@@ -170,7 +170,11 @@ class SpatialExtrapolationEvaluator:
         return models
 
     def _load_single_anp_model(self, checkpoint_path: Path, config: dict) -> GEDINeuralProcess:
-        """Helper to load a single ANP model from checkpoint."""
+        """Helper to load a single ANP model from checkpoint.
+
+        Note: Models are loaded to CPU by default for memory efficiency.
+        They will be moved to GPU on-demand during evaluation.
+        """
         model = GEDINeuralProcess(
             patch_size=config.get('patch_size', 3),
             embedding_channels=128,
@@ -183,9 +187,9 @@ class SpatialExtrapolationEvaluator:
             num_attention_heads=config.get('num_attention_heads', 4)
         )
 
-        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        # Load to CPU first for memory efficiency
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
-        model.to(self.device)
         model.eval()
 
         return model
@@ -673,6 +677,9 @@ class SpatialExtrapolationEvaluator:
                         seed_results = []
 
                         for model, config, seed_id in model_seeds:
+                            # Move model to GPU for this evaluation
+                            model.to(self.device)
+
                             # Load target region data
                             split_for_fewshot = (transfer_type == 'few-shot')
                             data_loaders = self.load_target_region_data(
@@ -683,6 +690,7 @@ class SpatialExtrapolationEvaluator:
 
                             if data_loaders is None or 'test' not in data_loaders:
                                 logger.warning(f"Skipping {test_region} seed {seed_id} (data not found)")
+                                model.cpu()  # Move back to CPU before continuing
                                 continue
 
                             # Prepare model for evaluation
@@ -698,6 +706,7 @@ class SpatialExtrapolationEvaluator:
                                     )
                                 else:
                                     logger.warning(f"No training data for few-shot in {test_region}, skipping")
+                                    model.cpu()  # Move back to CPU before continuing
                                     continue
 
                             # Evaluate on test set
@@ -711,6 +720,7 @@ class SpatialExtrapolationEvaluator:
                             elif model_type == 'xgboost':
                                 # XGBoost doesn't support fine-tuning in this implementation
                                 if transfer_type == 'few-shot':
+                                    model.cpu()  # Move back to CPU
                                     continue
                                 result = self.evaluate_xgboost_on_region(
                                     eval_model,
@@ -724,11 +734,14 @@ class SpatialExtrapolationEvaluator:
                             seed_results.append(result)
                             results.append(result)
 
-                            # Free GPU memory if we created a fine-tuned model
+                            # Free GPU memory after evaluation
                             if transfer_type == 'few-shot' and model_type == 'anp' and eval_model is not model:
                                 del eval_model
-                                if torch.cuda.is_available():
-                                    torch.cuda.empty_cache()
+
+                            # Move source model back to CPU to free GPU memory
+                            model.cpu()
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
 
                         # Compute aggregated statistics across seeds for this transfer type
                         if len(seed_results) > 1:
