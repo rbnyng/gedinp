@@ -260,13 +260,13 @@ class SpatialExtrapolationEvaluator:
         seed_id: Optional[str] = None,
         split_for_fewshot: bool = False
     ) -> Optional[Dict[str, DataLoader]]:
-        """Load target region data, optionally splitting for few-shot fine-tuning.
+        """Load target region data, optionally loading train split for few-shot fine-tuning.
 
         Args:
             region: The region to load data for
             seed_id: The seed ID to load data for. If None, loads from first seed or root.
-            split_for_fewshot: If True and self.few_shot_tiles is set, split data into
-                              few-shot training set and test set.
+            split_for_fewshot: If True and self.few_shot_tiles is set, load both train split
+                              (for few-shot fine-tuning) and test split (for evaluation).
 
         Returns:
             Dict with 'train' and/or 'test' DataLoaders. If split_for_fewshot is False,
@@ -278,25 +278,29 @@ class SpatialExtrapolationEvaluator:
             logger.warning(f"Region directory not found: {region_dir}")
             return None
 
-        # Determine path based on seed_id
+        # Determine paths based on seed_id
         if seed_id is not None and seed_id != 'default':
             test_split_path = region_dir / seed_id / 'test_split.parquet'
+            train_split_path = region_dir / seed_id / 'train_split.parquet'
             config_path = region_dir / seed_id / 'config.json'
         else:
             # Fallback: load from first seed or root directory
             seed_dirs = list(region_dir.glob('seed_*'))
             if seed_dirs:
                 test_split_path = seed_dirs[0] / 'test_split.parquet'
+                train_split_path = seed_dirs[0] / 'train_split.parquet'
                 config_path = seed_dirs[0] / 'config.json'
             else:
                 test_split_path = region_dir / 'test_split.parquet'
+                train_split_path = region_dir / 'train_split.parquet'
                 config_path = region_dir / 'config.json'
 
         if not test_split_path.exists():
             logger.warning(f"Test split not found: {test_split_path}")
             return None
 
-        df = pd.read_parquet(test_split_path)
+        # Load test split
+        df_test = pd.read_parquet(test_split_path)
 
         patch_size = 3
         embedding_channels = 128
@@ -307,7 +311,8 @@ class SpatialExtrapolationEvaluator:
             arr = np.array(flat_list)
             return arr.reshape(patch_size, patch_size, embedding_channels)
 
-        df['embedding_patch'] = df['embedding_patch'].apply(reshape_embedding)
+        # Process test data
+        df_test['embedding_patch'] = df_test['embedding_patch'].apply(reshape_embedding)
 
         global_bounds = None
         if config_path.exists():
@@ -319,28 +324,35 @@ class SpatialExtrapolationEvaluator:
 
         result = {}
 
-        # Split data if few-shot fine-tuning is requested
+        # Load train split for few-shot fine-tuning if requested
         if split_for_fewshot and self.few_shot_tiles is not None and self.few_shot_tiles > 0:
-            # Get unique tiles
-            unique_tiles = df['tile_id'].unique()
-            n_tiles = len(unique_tiles)
-
-            if n_tiles < self.few_shot_tiles + 10:  # Need at least 10 tiles for testing
-                logger.warning(f"Not enough tiles in {region} ({n_tiles}) for few-shot split "
-                             f"(requested {self.few_shot_tiles} training tiles). Using zero-shot only.")
+            if not train_split_path.exists():
+                logger.warning(f"Train split not found for few-shot: {train_split_path}. Using zero-shot only.")
                 split_for_fewshot = False
             else:
-                # Randomly sample tiles for few-shot training
-                np.random.seed(42)  # For reproducibility
-                train_tiles = np.random.choice(unique_tiles, size=self.few_shot_tiles, replace=False)
-                test_tiles = np.setdiff1d(unique_tiles, train_tiles)
+                # Load training split from target region
+                df_train = pd.read_parquet(train_split_path)
+                df_train['embedding_patch'] = df_train['embedding_patch'].apply(reshape_embedding)
 
-                df_train = df[df['tile_id'].isin(train_tiles)]
-                df_test = df[df['tile_id'].isin(test_tiles)]
+                # Get unique tiles from training data
+                unique_train_tiles = df_train['tile_id'].unique()
+                n_train_tiles = len(unique_train_tiles)
+
+                if n_train_tiles < self.few_shot_tiles:
+                    logger.warning(f"Not enough training tiles in {region} ({n_train_tiles}) for few-shot "
+                                 f"(requested {self.few_shot_tiles} tiles). Using all available training tiles.")
+                    n_tiles_to_use = n_train_tiles
+                else:
+                    n_tiles_to_use = self.few_shot_tiles
+
+                # Randomly sample tiles from training data for few-shot fine-tuning
+                np.random.seed(42)  # For reproducibility
+                sampled_train_tiles = np.random.choice(unique_train_tiles, size=n_tiles_to_use, replace=False)
+                df_train_fewshot = df_train[df_train['tile_id'].isin(sampled_train_tiles)]
 
                 # Create training dataset for few-shot fine-tuning
                 train_dataset = GEDINeuralProcessDataset(
-                    data_df=df_train,
+                    data_df=df_train_fewshot,
                     min_shots_per_tile=2,
                     context_ratio_range=(context_ratio, context_ratio),
                     normalize_coords=True,
@@ -357,55 +369,37 @@ class SpatialExtrapolationEvaluator:
                     num_workers=4
                 )
 
-                # Create test dataset
-                test_dataset = GEDINeuralProcessDataset(
-                    data_df=df_test,
-                    min_shots_per_tile=2,
-                    context_ratio_range=(context_ratio, context_ratio),
-                    normalize_coords=True,
-                    augment_coords=False,
-                    coord_noise_std=0.0,
-                    global_bounds=global_bounds
-                )
-
-                test_loader = DataLoader(
-                    test_dataset,
-                    batch_size=self.batch_size,
-                    shuffle=False,
-                    collate_fn=collate_neural_process,
-                    num_workers=4
-                )
-
                 result['train'] = train_loader
-                result['test'] = test_loader
 
                 seed_info = f" (seed: {seed_id})" if seed_id else ""
-                logger.info(f"Split {region}{seed_info}: {len(train_dataset)} train tiles, "
-                          f"{len(test_dataset)} test tiles")
+                logger.info(f"Loaded {region}{seed_info} for few-shot: {len(train_dataset)} train tiles (from training split)")
 
-        # If not splitting or split failed, load all data as test set
-        if not split_for_fewshot or 'test' not in result:
-            dataset = GEDINeuralProcessDataset(
-                data_df=df,
-                min_shots_per_tile=2,
-                context_ratio_range=(context_ratio, context_ratio),
-                normalize_coords=True,
-                augment_coords=False,
-                coord_noise_std=0.0,
-                global_bounds=global_bounds
-            )
+        # Always create test dataset from test split
+        test_dataset = GEDINeuralProcessDataset(
+            data_df=df_test,
+            min_shots_per_tile=2,
+            context_ratio_range=(context_ratio, context_ratio),
+            normalize_coords=True,
+            augment_coords=False,
+            coord_noise_std=0.0,
+            global_bounds=global_bounds
+        )
 
-            dataloader = DataLoader(
-                dataset,
-                batch_size=self.batch_size,
-                shuffle=False,
-                collate_fn=collate_neural_process,
-                num_workers=4
-            )
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            collate_fn=collate_neural_process,
+            num_workers=4
+        )
 
-            result['test'] = dataloader
-            seed_info = f" (seed: {seed_id})" if seed_id else ""
-            logger.info(f"Loaded {region}{seed_info}: {len(dataset)} tiles")
+        result['test'] = test_loader
+
+        seed_info = f" (seed: {seed_id})" if seed_id else ""
+        if 'train' not in result:
+            logger.info(f"Loaded {region}{seed_info}: {len(test_dataset)} test tiles")
+        else:
+            logger.info(f"Loaded {region}{seed_info}: {len(test_dataset)} test tiles (for evaluation)")
 
         return result
 
