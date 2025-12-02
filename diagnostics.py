@@ -50,94 +50,6 @@ def plot_learning_curves(history_path, output_path):
     print(f"Saved learning curves to: {output_path}")
 
 
-def plot_spatial_splits(train_file, val_file, test_file, output_path):
-    def load_split(file_path):
-        if file_path.suffix == '.parquet':
-            return pd.read_parquet(file_path)
-        else:
-            return pd.read_csv(file_path)
-
-    train_df = load_split(train_file)
-    val_df = load_split(val_file)
-    test_df = load_split(test_file)
-
-    def get_tile_info(df, split_name):
-        tiles = []
-        for tile_id in df['tile_id'].unique():
-            tile_data = df[df['tile_id'] == tile_id]
-            tiles.append({
-                'tile_id': tile_id,
-                'split': split_name,
-                'n_shots': len(tile_data)
-            })
-        return tiles
-
-    train_tiles = get_tile_info(train_df, 'train')
-    val_tiles = get_tile_info(val_df, 'val')
-    test_tiles = get_tile_info(test_df, 'test')
-
-    fig = plt.figure(figsize=(14, 6))
-    gs = gridspec.GridSpec(1, 2, width_ratios=[2, 1])
-
-    ax1 = plt.subplot(gs[0])
-
-    colors = {'train': '#1f77b4', 'val': '#ff7f0e', 'test': '#2ca02c'}
-
-    for df, split_name in [(train_df, 'train'), (val_df, 'val'), (test_df, 'test')]:
-        ax1.scatter(df['longitude'], df['latitude'],
-                   c=colors[split_name],
-                   alpha=0.5,
-                   s=10,
-                   label=split_name.upper(),
-                   edgecolors='none')
-
-    ax1.set_xlabel('Longitude', fontsize=12, fontweight='bold')
-    ax1.set_ylabel('Latitude', fontsize=12, fontweight='bold')
-    ax1.set_title('Spatial Distribution of GEDI Shots', fontsize=14, fontweight='bold')
-    ax1.set_aspect('equal', adjustable='box')
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(loc='best', fontsize=10)
-
-    ax2 = plt.subplot(gs[1])
-    ax2.axis('off')
-
-    stats_text = "Dataset Statistics\n" + "=" * 30 + "\n\n"
-
-    stats = [
-        ('TRAIN', len(train_tiles), len(train_df)),
-        ('VAL', len(val_tiles), len(val_df)),
-        ('TEST', len(test_tiles), len(test_df))
-    ]
-
-    for split, n_tiles, n_shots in stats:
-        stats_text += f"{split}:\n"
-        stats_text += f"  Tiles: {n_tiles}\n"
-        stats_text += f"  Shots: {n_shots:,}\n"
-        stats_text += f"  Shots/tile: {n_shots/n_tiles:.1f}\n\n"
-
-    total_tiles = len(train_tiles) + len(val_tiles) + len(test_tiles)
-    total_shots = len(train_df) + len(val_df) + len(test_df)
-
-    stats_text += f"TOTAL:\n"
-    stats_text += f"  Tiles: {total_tiles}\n"
-    stats_text += f"  Shots: {total_shots:,}\n\n"
-
-    stats_text += "Split Ratios:\n"
-    stats_text += f"  Train: {len(train_tiles)/total_tiles*100:.1f}%\n"
-    stats_text += f"  Val:   {len(val_tiles)/total_tiles*100:.1f}%\n"
-    stats_text += f"  Test:  {len(test_tiles)/total_tiles*100:.1f}%\n"
-
-    ax2.text(0.1, 0.95, stats_text, transform=ax2.transAxes,
-             fontsize=10, verticalalignment='top', fontfamily='monospace',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-    print(f"Saved spatial splits visualization to: {output_path}")
-
-
 def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=None, agbd_scale=200.0):
     model.eval()
 
@@ -202,7 +114,6 @@ def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=Non
             log_mae = np.mean(np.abs(pred_mean_norm - target_norm))
             log_r2 = 1 - np.sum((target_norm - pred_mean_norm) ** 2) / np.sum((target_norm - target_norm.mean()) ** 2)
 
-            # what % of points fall within 1σ and 2σ (in log space)
             within_1sigma = np.sum(np.abs(target_norm - pred_mean_norm) <= pred_std_norm) / len(target_norm) * 100
             within_2sigma = np.sum(np.abs(target_norm - pred_mean_norm) <= 2*pred_std_norm) / len(target_norm) * 100
 
@@ -274,11 +185,11 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle('Uncertainty Calibration Analysis', fontsize=16, fontweight='bold')
 
-    # Panel 1: Z-score distribution
+    # Z-score distribution
     ax = axes[0, 0]
     ax.hist(z_scores, bins=50, density=True, alpha=0.7, edgecolor='black', label='Observed')
 
-    # Overlay ideal N(0,1) distribution
+    # ideal N(0,1) distribution
     x = np.linspace(-4, 4, 100)
     ax.plot(x, 1/np.sqrt(2*np.pi) * np.exp(-0.5*x**2), 'r-', linewidth=2, label='Ideal N(0,1)')
 
@@ -296,20 +207,20 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
             transform=ax.transAxes, verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-    # Panel 2: Coverage plot
+    # Coverage plot
     ax = axes[0, 1]
 
-    # Calculate empirical coverage at different confidence levels
+    # empirical coverage at different confidence levels
     confidence_levels = np.linspace(0, 3, 30)
     empirical_coverage = []
     theoretical_coverage = []
 
     for level in confidence_levels:
-        # Empirical: what % of points fall within level*sigma
+        # what % of points fall within level*sigma
         coverage = np.sum(np.abs(all_targets - all_pred_means) <= level * all_pred_stds) / len(all_targets)
         empirical_coverage.append(coverage * 100)
 
-        # Theoretical: for normal distribution
+        # Theoretical for normal distribution
         theoretical_coverage.append(2 * norm.cdf(level) * 100 - 100)
 
     ax.plot(confidence_levels, empirical_coverage, 'o-', linewidth=2, markersize=5, label='Empirical')
@@ -328,7 +239,7 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
     ax.set_xlim(0, 3)
     ax.set_ylim(0, 100)
 
-    # Panel 3: Absolute error vs uncertainty
+    # Absolute error vs uncertainty
     ax = axes[1, 0]
 
     abs_errors = np.abs(all_targets - all_pred_means)
@@ -362,7 +273,7 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
 
-    # Panel 4: Q-Q plot
+    # Q-Q plot
     ax = axes[1, 1]
 
     probplot(z_scores, dist="norm", plot=ax)
@@ -402,7 +313,7 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
 
     config = load_config(model_dir / 'config.json')
 
-    print("[1/4] Generating learning curves...")
+    print("Generating learning curves...")
     if (model_dir / 'history.json').exists():
         plot_learning_curves(
             model_dir / 'history.json',
@@ -411,29 +322,8 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
     else:
         print("  history.json not found, skipping")
 
-    print("\n[2/4] Visualizing spatial tile splits...")
-    split_files_exist = all((model_dir / f'{split}_split.parquet').exists() for split in ['train', 'val', 'test'])
-    if not split_files_exist:
-        split_files_exist = all((model_dir / f'{split}_split.csv').exists() for split in ['train', 'val', 'test'])
-        if split_files_exist:
-            plot_spatial_splits(
-                model_dir / 'train_split.csv',
-                model_dir / 'val_split.csv',
-                model_dir / 'test_split.csv',
-                model_dir / 'diagnostics_spatial_splits.png'
-            )
-    else:
-        plot_spatial_splits(
-            model_dir / 'train_split.parquet',
-            model_dir / 'val_split.parquet',
-            model_dir / 'test_split.parquet',
-            model_dir / 'diagnostics_spatial_splits.png'
-        )
 
-    if not split_files_exist:
-        print("  Split files not found (neither .parquet nor .csv), skipping")
-
-    print("\n[3/4] Generating sample predictions...")
+    print("\n Generating sample predictions...")
 
     model = None
     val_dataset = None
@@ -480,7 +370,7 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
             agbd_scale=agbd_scale
         )
 
-    print("\n[4/4] Analyzing uncertainty calibration...")
+    print("\n Analyzing uncertainty calibration...")
     if model is not None and test_dataset is not None:
         agbd_scale = config.get('agbd_scale', 200.0)
         plot_uncertainty_calibration(
@@ -493,12 +383,6 @@ def generate_all_diagnostics(model_dir, device='cpu', n_sample_plots=5):
 
     print("\n" + "=" * 80)
     print("DIAGNOSTICS COMPLETE")
-    print("=" * 80)
-    print("Generated files:")
-    print("  - diagnostics_learning_curves.png")
-    print("  - diagnostics_spatial_splits.png")
-    print("  - diagnostics_sample_predictions.png")
-    print("  - diagnostics_uncertainty_calibration.png")
     print("=" * 80)
     print()
 
