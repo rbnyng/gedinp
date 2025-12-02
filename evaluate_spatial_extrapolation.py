@@ -25,7 +25,8 @@ import pickle
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-
+import random
+import os
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
@@ -60,14 +61,6 @@ REGION_ORDER = ['maine', 'tolima', 'hokkaido', 'sudtirol']
 
 
 def create_centered_diverging_colormap(name='GreenRed'):
-    """Create a custom diverging colormap with green at center and red at extremes.
-
-    This is useful for metrics where a central value (e.g., 1.0) is ideal,
-    and divergence in either direction is undesirable.
-
-    Returns:
-        LinearSegmentedColormap: Custom colormap going Red → Green → Red
-    """
     colors = ['#d73027', '#fee08b', '#1a9850', '#fee08b', '#d73027']  # Red → Yellow → Green → Yellow → Red
     n_bins = 256
     cmap = LinearSegmentedColormap.from_list(name, colors, N=n_bins)
@@ -75,29 +68,10 @@ def create_centered_diverging_colormap(name='GreenRed'):
 
 
 def set_seed(seed: int = 42):
-    """Set random seeds for reproducibility across all libraries.
-
-    Args:
-        seed: Random seed value (default: 42)
-
-    Note:
-        Setting torch.backends.cudnn.deterministic = True may reduce performance
-        but ensures reproducible results across runs.
-    """
-    import random
-    import os
-
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
-    # Make PyTorch operations deterministic
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-    # Set a fixed value for the hash seed
-    os.environ['PYTHONHASHSEED'] = str(seed)
 
     logger.info(f"Random seed set to {seed} for reproducibility")
 
@@ -116,22 +90,6 @@ class SpatialExtrapolationEvaluator:
         few_shot_batch_size: Optional[int] = None,
         include_zero_shot: bool = True
     ):
-        """
-        Initialize the spatial extrapolation evaluator.
-
-        Args:
-            results_dir: Directory containing regional training results
-            output_dir: Output directory for evaluation results
-            device: Device to use for evaluation
-            context_ratio: Ratio of context shots to total shots (0-1) within each tile. Default: 0.5
-            batch_size: Batch size for evaluation
-            few_shot_tiles: Number of tiles from target region to use for few-shot fine-tuning.
-                           If None, only zero-shot evaluation is performed.
-            few_shot_epochs: Number of epochs for few-shot fine-tuning
-            few_shot_lr: Learning rate for few-shot fine-tuning
-            few_shot_batch_size: Batch size for few-shot fine-tuning. If None, uses batch_size // 4
-            include_zero_shot: If True and few_shot_tiles is set, also evaluate zero-shot performance
-        """
         self.results_dir = Path(results_dir)
         self.output_dir = Path(output_dir)
         self.device = device
@@ -140,7 +98,6 @@ class SpatialExtrapolationEvaluator:
         self.few_shot_tiles = few_shot_tiles
         self.few_shot_epochs = few_shot_epochs
         self.few_shot_lr = few_shot_lr
-        # Use smaller batch size for fine-tuning to avoid OOM
         self.few_shot_batch_size = few_shot_batch_size if few_shot_batch_size is not None else max(1, batch_size // 4)
         self.include_zero_shot = include_zero_shot
 
@@ -158,11 +115,6 @@ class SpatialExtrapolationEvaluator:
         logger.info(f"Output directory: {self.output_dir}")
 
     def load_anp_model(self, region: str) -> Optional[List[Tuple[GEDINeuralProcess, dict, str]]]:
-        """Load all ANP model seeds for a region.
-
-        Returns:
-            List of (model, config, seed_id) tuples, one per seed.
-        """
         region_dir = self.results_dir / region / 'anp'
 
         if not region_dir.exists():
@@ -172,7 +124,6 @@ class SpatialExtrapolationEvaluator:
         seed_dirs = sorted(list(region_dir.glob('seed_*')))
 
         if not seed_dirs:
-            # Fallback to loading from region_dir directly (no seed structure)
             model_dir = region_dir
             checkpoint_path = model_dir / 'best_r2_model.pt'
             config_path = model_dir / 'config.json'
@@ -188,7 +139,6 @@ class SpatialExtrapolationEvaluator:
             logger.info(f"Loaded ANP model for {region} from {checkpoint_path}")
             return [(model, config, 'default')]
 
-        # Load all seeds
         models = []
         for model_dir in seed_dirs:
             seed_id = model_dir.name
@@ -218,11 +168,6 @@ class SpatialExtrapolationEvaluator:
         return models
 
     def _load_single_anp_model(self, checkpoint_path: Path, config: dict) -> GEDINeuralProcess:
-        """Helper to load a single ANP model from checkpoint.
-
-        Note: Models are loaded to CPU by default for memory efficiency.
-        They will be moved to GPU on-demand during evaluation.
-        """
         model = GEDINeuralProcess(
             patch_size=config.get('patch_size', 3),
             embedding_channels=128,
@@ -243,11 +188,6 @@ class SpatialExtrapolationEvaluator:
         return model
 
     def load_xgboost_model(self, region: str) -> Optional[List[Tuple[XGBoostBaseline, dict, str]]]:
-        """Load all XGBoost model seeds for a region.
-
-        Returns:
-            List of (model, config, seed_id) tuples, one per seed.
-        """
         region_dir = self.results_dir / region / 'baselines'
 
         if not region_dir.exists():
@@ -312,18 +252,6 @@ class SpatialExtrapolationEvaluator:
         seed_id: Optional[str] = None,
         split_for_fewshot: bool = False
     ) -> Optional[Dict[str, DataLoader]]:
-        """Load target region data, optionally loading train split for few-shot fine-tuning.
-
-        Args:
-            region: The region to load data for
-            seed_id: The seed ID to load data for. If None, loads from first seed or root.
-            split_for_fewshot: If True and self.few_shot_tiles is set, load both train split
-                              (for few-shot fine-tuning) and test split (for evaluation).
-
-        Returns:
-            Dict with 'train' and/or 'test' DataLoaders. If split_for_fewshot is False,
-            only returns {'test': dataloader}.
-        """
         region_dir = self.results_dir / region / 'anp'
 
         if not region_dir.exists():
@@ -462,17 +390,6 @@ class SpatialExtrapolationEvaluator:
         train_region: str,
         test_region: str
     ) -> GEDINeuralProcess:
-        """Fine-tune an ANP model on few-shot data from the target region.
-
-        Args:
-            model: Pre-trained model from source region
-            train_loader: DataLoader with few-shot training data from target region
-            train_region: Source region name (for logging)
-            test_region: Target region name (for logging)
-
-        Returns:
-            Fine-tuned model
-        """
         # Create a copy of the model for fine-tuning
         # Move to CPU first to avoid duplicating GPU memory usage
         original_device = next(model.parameters()).device
