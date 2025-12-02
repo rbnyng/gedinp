@@ -74,6 +74,34 @@ def create_centered_diverging_colormap(name='GreenRed'):
     return cmap
 
 
+def set_seed(seed: int = 42):
+    """Set random seeds for reproducibility across all libraries.
+
+    Args:
+        seed: Random seed value (default: 42)
+
+    Note:
+        Setting torch.backends.cudnn.deterministic = True may reduce performance
+        but ensures reproducible results across runs.
+    """
+    import random
+    import os
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # Make PyTorch operations deterministic
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # Set a fixed value for the hash seed
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+    logger.info(f"Random seed set to {seed} for reproducibility")
+
+
 class SpatialExtrapolationEvaluator:
     def __init__(
         self,
@@ -1547,11 +1575,21 @@ Examples:
         help='Device to use (default: auto-detect)'
     )
 
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=42,
+        help='Random seed for reproducibility (default: 42)'
+    )
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
+    # Set random seed for reproducibility
+    set_seed(args.seed)
 
     evaluator = SpatialExtrapolationEvaluator(
         results_dir=Path(args.results_dir),
