@@ -2,6 +2,7 @@
 
 from .models import (
     RandomForestBaseline,
+    QuantileRegressionForestBaseline,
     XGBoostBaseline,
     IDWBaseline,
     MLPBaseline
@@ -9,6 +10,7 @@ from .models import (
 
 __all__ = [
     'RandomForestBaseline',
+    'QuantileRegressionForestBaseline',
     'XGBoostBaseline',
     'IDWBaseline',
     'MLPBaseline'
