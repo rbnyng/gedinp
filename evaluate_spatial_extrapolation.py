@@ -32,7 +32,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent))
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
-from models.neural_process import GEDINeuralProcess
+from models.neural_process import GEDINeuralProcess, kl_divergence_gaussian
 from baselines.models import XGBoostBaseline, RegressionKrigingBaseline
 from utils.evaluation import compute_metrics, compute_calibration_metrics
 from utils.config import load_config
@@ -461,20 +461,29 @@ class SpatialExtrapolationEvaluator:
                     target_embeddings = batch['target_embeddings'][i].to(self.device)
                     target_agbd = batch['target_agbd'][i].to(self.device)
 
-                    pred_mean, pred_log_var, kl_loss, _ = fine_tuned_model(
+                    pred_mean, pred_log_var, z_mu_context, z_log_sigma_context, z_mu_all, z_log_sigma_all = fine_tuned_model(
                         context_coords,
                         context_embeddings,
                         context_agbd,
                         target_coords,
                         target_embeddings,
+                        query_agbd=target_agbd,
                         training=True
                     )
 
                     recon_loss = torch.nn.functional.mse_loss(pred_mean, target_agbd, reduction='mean')
 
-                    if kl_loss is not None:
-                        if kl_loss.numel() > 1:
-                            kl_loss = kl_loss.mean()
+                    # Compute KL divergence if latent path is used
+                    if z_mu_context is not None and z_log_sigma_context is not None:
+                        if z_mu_all is not None and z_log_sigma_all is not None:
+                            # ANP: KL[p(z|C,T) || q(z|C)]
+                            kl_loss = kl_divergence_gaussian(
+                                z_mu_context, z_log_sigma_context,
+                                z_mu_all, z_log_sigma_all
+                            )
+                        else:
+                            # Latent-only: KL[q(z|C) || N(0,1)]
+                            kl_loss = kl_divergence_gaussian(z_mu_context, z_log_sigma_context)
                         tile_loss = recon_loss + 0.01 * kl_loss
                     else:
                         tile_loss = recon_loss
@@ -523,12 +532,13 @@ class SpatialExtrapolationEvaluator:
                     target_embeddings = batch['target_embeddings'][i].to(self.device)
                     target_agbd = batch['target_agbd'][i].to(self.device)
 
-                    pred_mean, pred_log_var, _, _ = model(
+                    pred_mean, pred_log_var, _, _, _, _ = model(
                         context_coords,
                         context_embeddings,
                         context_agbd,
                         target_coords,
                         target_embeddings,
+                        query_agbd=None,
                         training=False
                     )
 
