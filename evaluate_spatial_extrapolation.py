@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
 from models.neural_process import GEDINeuralProcess, kl_divergence_gaussian
-from baselines.models import XGBoostBaseline
+from baselines.models import XGBoostBaseline, RegressionKrigingBaseline
 from utils.evaluation import compute_metrics, compute_calibration_metrics
 from utils.config import load_config
 
@@ -234,6 +234,63 @@ class SpatialExtrapolationEvaluator:
             return None
 
         logger.info(f"Loaded {len(models)} XGBoost model seeds for {region}")
+        return models
+
+    def load_regression_kriging_model(self, region: str) -> Optional[List[Tuple[RegressionKrigingBaseline, dict, str]]]:
+        region_dir = self.results_dir / region / 'baselines'
+
+        if not region_dir.exists():
+            logger.warning(f"Baselines directory not found for {region}: {region_dir}")
+            return None
+
+        seed_dirs = sorted(list(region_dir.glob('seed_*')))
+
+        if not seed_dirs:
+            model_dir = region_dir
+            model_path = model_dir / 'regression_kriging.pkl'
+            config_path = model_dir / 'config.json'
+
+            if not model_path.exists() or not config_path.exists():
+                logger.warning(f"No seed directories and no model in {region_dir}")
+                return None
+
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+
+            logger.info(f"Loaded Regression Kriging model for {region} from {model_path}")
+            return [(model, config, 'default')]
+
+        models = []
+        for model_dir in seed_dirs:
+            seed_id = model_dir.name
+            model_path = model_dir / 'regression_kriging.pkl'
+            config_path = model_dir / 'config.json'
+
+            if not model_path.exists():
+                logger.warning(f"Regression Kriging model not found: {model_path}")
+                continue
+
+            if not config_path.exists():
+                logger.warning(f"Config not found: {config_path}")
+                continue
+
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+
+            models.append((model, config, seed_id))
+            logger.info(f"Loaded Regression Kriging model for {region} from {seed_id}")
+
+        if not models:
+            logger.warning(f"No valid Regression Kriging models found for {region}")
+            return None
+
+        logger.info(f"Loaded {len(models)} Regression Kriging model seeds for {region}")
         return models
 
     def load_target_region_data(
@@ -588,6 +645,67 @@ class SpatialExtrapolationEvaluator:
 
         return results
 
+    def evaluate_regression_kriging_on_region(
+        self,
+        model: RegressionKrigingBaseline,
+        dataloader: DataLoader,
+        train_region: str,
+        test_region: str
+    ) -> dict:
+        all_preds = []
+        all_targets = []
+        all_uncertainties = []
+
+        logger.info(f"Evaluating Regression Kriging {train_region} → {test_region}")
+
+        for batch in tqdm(dataloader, desc=f"RK {train_region}→{test_region}"):
+            for i in range(len(batch['target_coords'])):
+                target_coords = batch['target_coords'][i].cpu().numpy()
+                target_embeddings = batch['target_embeddings'][i].cpu().numpy()
+                target_agbd = batch['target_agbd'][i].cpu().numpy()
+
+                preds, uncertainties = model.predict(
+                    target_coords,
+                    target_embeddings,
+                    return_std=True
+                )
+
+                all_preds.append(preds)
+                all_targets.append(target_agbd.squeeze())
+                all_uncertainties.append(uncertainties)
+
+        preds = np.concatenate(all_preds, axis=0)
+        targets = np.concatenate(all_targets, axis=0)
+        uncertainties = np.concatenate(all_uncertainties, axis=0)
+
+        metrics = compute_metrics(preds, targets, uncertainties)
+
+        calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
+
+        if 'z_mean' in calib_metrics:
+            calib_metrics['z_score_mean'] = calib_metrics.pop('z_mean')
+        if 'z_std' in calib_metrics:
+            calib_metrics['z_score_std'] = calib_metrics.pop('z_std')
+
+        log_metrics = {
+            'log_rmse': metrics['rmse'],
+            'log_mae': metrics['mae'],
+            'log_r2': metrics['r2'],
+        }
+        if 'mean_uncertainty' in metrics:
+            log_metrics['mean_uncertainty'] = metrics['mean_uncertainty']
+
+        results = {
+            **log_metrics,
+            **calib_metrics,
+            'train_region': train_region,
+            'test_region': test_region,
+            'model_type': 'regression_kriging',
+            'num_predictions': len(preds)
+        }
+
+        return results
+
     def run_cross_evaluation(self, model_types: List[str] = ['anp', 'xgboost']) -> pd.DataFrame:
         results = []
 
@@ -602,6 +720,8 @@ class SpatialExtrapolationEvaluator:
                     model_data = self.load_anp_model(region)
                 elif model_type == 'xgboost':
                     model_data = self.load_xgboost_model(region)
+                elif model_type == 'regression_kriging':
+                    model_data = self.load_regression_kriging_model(region)
                 else:
                     logger.error(f"Unknown model type: {model_type}")
                     continue
@@ -675,6 +795,15 @@ class SpatialExtrapolationEvaluator:
                                 if transfer_type == 'few-shot':
                                     continue
                                 result = self.evaluate_xgboost_on_region(
+                                    eval_model,
+                                    data_loaders['test'],
+                                    train_region,
+                                    test_region
+                                )
+                            elif model_type == 'regression_kriging':
+                                if transfer_type == 'few-shot':
+                                    continue
+                                result = self.evaluate_regression_kriging_on_region(
                                     eval_model,
                                     data_loaders['test'],
                                     train_region,
@@ -1323,7 +1452,7 @@ Examples:
     parser.add_argument(
         '--models',
         nargs='+',
-        choices=['anp', 'xgboost'],
+        choices=['anp', 'xgboost', 'regression_kriging'],
         default=['anp', 'xgboost'],
         help='Model types to evaluate (default: anp xgboost)'
     )

@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
+from pykrige.ok import OrdinaryKriging
 
 
 class RandomForestBaseline:
@@ -390,6 +391,212 @@ class IDWBaseline:
                 stds[i] = np.sqrt(weighted_var)
 
         return predictions, stds
+
+
+class RegressionKrigingBaseline:
+    """
+    Regression Kriging baseline for biomass prediction.
+
+    Combines Random Forest for trend modeling (using embeddings + coords)
+    with Ordinary Kriging for spatial interpolation of residuals.
+    This provides a strong geostatistics baseline that properly models
+    both deterministic patterns and spatial autocorrelation.
+
+    RK = RF(embeddings, coords) + Kriging(residuals)
+    """
+
+    def __init__(
+        self,
+        rf_n_estimators: int = 100,
+        rf_max_depth: Optional[int] = None,
+        rf_min_samples_split: int = 2,
+        rf_min_samples_leaf: int = 1,
+        rf_n_jobs: int = -1,
+        random_state: int = 42,
+        variogram_model: str = 'spherical',
+        nlags: int = 20,
+        epsilon: float = 1e-10
+    ):
+        """
+        Initialize Regression Kriging model.
+
+        Args:
+            rf_n_estimators: Random Forest: number of trees
+            rf_max_depth: Random Forest: maximum tree depth
+            rf_min_samples_split: Random Forest: minimum samples to split a node
+            rf_min_samples_leaf: Random Forest: minimum samples in a leaf
+            rf_n_jobs: Random Forest: number of parallel jobs (-1 for all cores)
+            random_state: Random seed
+            variogram_model: Kriging variogram model ('spherical', 'exponential', 'gaussian', 'linear')
+            nlags: Number of lags for variogram estimation
+            epsilon: Small constant to avoid numerical issues
+        """
+        self.rf_n_estimators = rf_n_estimators
+        self.rf_max_depth = rf_max_depth
+        self.rf_min_samples_split = rf_min_samples_split
+        self.rf_min_samples_leaf = rf_min_samples_leaf
+        self.rf_n_jobs = rf_n_jobs
+        self.random_state = random_state
+        self.variogram_model = variogram_model
+        self.nlags = nlags
+        self.epsilon = epsilon
+
+        # Random Forest for trend
+        self.rf_model = RandomForestRegressor(
+            n_estimators=rf_n_estimators,
+            max_depth=rf_max_depth,
+            min_samples_split=rf_min_samples_split,
+            min_samples_leaf=rf_min_samples_leaf,
+            n_jobs=rf_n_jobs,
+            random_state=random_state
+        )
+
+        # Kriging model for residuals (fitted during training)
+        self.krige_model = None
+
+        # Store training data
+        self.train_coords_raw = None  # Store raw coords for kriging
+        self.train_residuals = None
+
+    def _prepare_features(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray
+    ) -> np.ndarray:
+        """
+        Prepare features for Random Forest.
+
+        Args:
+            coords: (N, 2) array of [lon, lat]
+            embeddings: (N, H, W, C) array of embedding patches
+
+        Returns:
+            (N, 2 + H*W*C) flattened feature array
+        """
+        # Flatten embeddings
+        n_samples = embeddings.shape[0]
+        embeddings_flat = embeddings.reshape(n_samples, -1)
+
+        # Concatenate coords + embeddings
+        features = np.concatenate([coords, embeddings_flat], axis=1)
+        return features
+
+    def fit(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        agbd: np.ndarray
+    ):
+        """
+        Train the Regression Kriging model.
+
+        Step 1: Fit Random Forest on trend (embeddings + coords)
+        Step 2: Compute residuals
+        Step 3: Fit Ordinary Kriging on residuals
+
+        Args:
+            coords: (N, 2) training coordinates [lon, lat]
+            embeddings: (N, H, W, C) training embeddings
+            agbd: (N,) training AGBD values (already log-transformed)
+        """
+        # Step 1: Fit RF for trend
+        X = self._prepare_features(coords, embeddings)
+        self.rf_model.fit(X, agbd)
+
+        # Step 2: Compute residuals
+        trend_pred = self.rf_model.predict(X)
+        residuals = agbd - trend_pred
+
+        # Store for kriging
+        self.train_coords_raw = coords.copy()
+        self.train_residuals = residuals.copy()
+
+        # Step 3: Fit Ordinary Kriging on residuals
+        # PyKrige expects separate x and y coordinates
+        x_coords = coords[:, 0]  # longitude
+        y_coords = coords[:, 1]  # latitude
+
+        try:
+            self.krige_model = OrdinaryKriging(
+                x_coords,
+                y_coords,
+                residuals,
+                variogram_model=self.variogram_model,
+                nlags=self.nlags,
+                enable_plotting=False,
+                verbose=False
+            )
+        except Exception as e:
+            # If kriging fails (e.g., too few points, singular matrix),
+            # fall back to simple mean residual
+            print(f"Warning: Kriging fitting failed ({e}). Falling back to mean residual.")
+            self.krige_model = None
+
+    def predict(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        return_std: bool = True
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """
+        Predict AGBD using Regression Kriging.
+
+        Args:
+            coords: (N, 2) query coordinates
+            embeddings: (N, H, W, C) query embeddings
+            return_std: If True, return uncertainty estimates
+
+        Returns:
+            predictions: (N,) predicted AGBD values
+            std: (N,) prediction uncertainty if return_std=True, else None
+        """
+        # Step 1: RF trend prediction
+        X = self._prepare_features(coords, embeddings)
+        trend_pred = self.rf_model.predict(X)
+
+        # Step 2: Krige residuals
+        x_coords = coords[:, 0]
+        y_coords = coords[:, 1]
+
+        if self.krige_model is not None:
+            try:
+                # PyKrige returns (predictions, variance)
+                residual_pred, residual_var = self.krige_model.execute(
+                    'points',
+                    x_coords,
+                    y_coords
+                )
+
+                # Convert variance to std
+                residual_std = np.sqrt(np.maximum(residual_var, 0))
+
+            except Exception as e:
+                # If kriging prediction fails, use mean residual
+                print(f"Warning: Kriging prediction failed ({e}). Using mean residual.")
+                residual_pred = np.full(len(coords), np.mean(self.train_residuals))
+                residual_std = np.full(len(coords), np.std(self.train_residuals))
+        else:
+            # Fallback: use mean residual
+            residual_pred = np.full(len(coords), np.mean(self.train_residuals))
+            residual_std = np.full(len(coords), np.std(self.train_residuals))
+
+        # Step 3: Combine trend + residuals
+        final_pred = trend_pred + residual_pred
+
+        if return_std:
+            # Combine RF uncertainty + kriging uncertainty
+            # Get RF uncertainty from tree variance
+            tree_predictions = np.array([
+                tree.predict(X) for tree in self.rf_model.estimators_
+            ])  # (n_trees, N)
+            rf_std = np.std(tree_predictions, axis=0)
+
+            # Combine variances (assuming independence)
+            total_std = np.sqrt(rf_std**2 + residual_std**2)
+
+            return final_pred, total_std
+        else:
+            return final_pred, None
 
 
 class MLPNet(nn.Module):
