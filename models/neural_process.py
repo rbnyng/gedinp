@@ -444,22 +444,7 @@ def kl_divergence_gaussian(
     mu: torch.Tensor,
     log_sigma: torch.Tensor
 ) -> torch.Tensor:
-    """
-    Compute KL divergence between N(mu, sigma) and N(0, 1).
 
-    KL(q||p) = 0.5 * sum(sigma^2 + mu^2 - 1 - log(sigma^2))
-
-    Args:
-        mu: Mean of approximate posterior (batch, latent_dim)
-        log_sigma: Log standard deviation (batch, latent_dim), where log_sigma = log(std)
-
-    Returns:
-        KL divergence (scalar)
-
-    Note:
-        exp(2 * log_sigma) = exp(2 * log(std)) = std^2 = variance
-        -2 * log_sigma = -log(std^2) = -log(variance)
-    """
     # KL divergence for Gaussian
     kl = 0.5 * torch.sum(
         torch.exp(2 * log_sigma) + mu ** 2 - 1 - 2 * log_sigma,
@@ -476,20 +461,7 @@ def neural_process_loss(
     z_log_sigma: Optional[torch.Tensor] = None,
     kl_weight: float = 1.0
 ) -> Tuple[torch.Tensor, dict]:
-    """
-    Loss for Neural Process with optional KL divergence.
 
-    Args:
-        pred_mean: Predicted means (batch, 1)
-        pred_log_var: Predicted log variances (batch, 1) or None
-        target: Target values (batch, 1)
-        z_mu: Latent mean (1, latent_dim) or None
-        z_log_sigma: Latent log std (1, latent_dim) or None
-        kl_weight: Weight for KL divergence term (beta-VAE style)
-
-    Returns:
-        (total_loss, loss_dict) where loss_dict contains individual components
-    """
     if pred_log_var is not None:
         # Gaussian NLL
         nll = 0.5 * (
