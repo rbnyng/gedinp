@@ -138,19 +138,22 @@ def evaluate_model(
                 # if computing loss, process all targets at once (no chunking)
                 # because KL divergence requires the full latent representation
                 if compute_loss:
-                    pred_mean, pred_log_var, z_mu, z_log_sigma = model(
+                    pred_mean, pred_log_var, z_mu_context, z_log_sigma_context, z_mu_all, z_log_sigma_all = model(
                         context_coords,
                         context_embeddings,
                         context_agbd,
                         target_coords,
                         target_embeddings,
+                        query_agbd=None,
                         training=False
                     )
 
                     if neural_process_loss is not None:
                         loss, loss_dict = neural_process_loss(
                             pred_mean, pred_log_var, target_agbd,
-                            z_mu, z_log_sigma, kl_weight
+                            z_mu_context, z_log_sigma_context,
+                            z_mu_all, z_log_sigma_all,
+                            kl_weight
                         )
 
                         if not (torch.isnan(loss) or torch.isinf(loss)):
@@ -180,12 +183,13 @@ def evaluate_model(
                         chunk_target_embeddings = target_embeddings[chunk_start:chunk_end]
                         chunk_target_agbd = target_agbd[chunk_start:chunk_end]
 
-                        pred_mean, pred_log_var, _, _ = model(
+                        pred_mean, pred_log_var, _, _, _, _ = model(
                             context_coords,
                             context_embeddings,
                             context_agbd,
                             chunk_target_coords,
                             chunk_target_embeddings,
+                            query_agbd=None,
                             training=False
                         )
 

@@ -156,18 +156,21 @@ def train_epoch(model, dataloader, optimizer, device, kl_weight=1.0):
             if len(target_coords) == 0:
                 continue
 
-            pred_mean, pred_log_var, z_mu, z_log_sigma = model(
+            pred_mean, pred_log_var, z_mu_context, z_log_sigma_context, z_mu_all, z_log_sigma_all = model(
                 context_coords,
                 context_embeddings,
                 context_agbd,
                 target_coords,
                 target_embeddings,
+                query_agbd=target_agbd,
                 training=True
             )
 
             loss, loss_dict = neural_process_loss(
                 pred_mean, pred_log_var, target_agbd,
-                z_mu, z_log_sigma, kl_weight
+                z_mu_context, z_log_sigma_context,
+                z_mu_all, z_log_sigma_all,
+                kl_weight
             )
 
             # Check for NaN/Inf

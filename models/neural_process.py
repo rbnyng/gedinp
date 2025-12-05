@@ -332,8 +332,9 @@ class GEDINeuralProcess(nn.Module):
         context_agbd: torch.Tensor,
         query_coords: torch.Tensor,
         query_embeddings: torch.Tensor,
+        query_agbd: Optional[torch.Tensor] = None,
         training: bool = True
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Forward pass.
 
@@ -343,14 +344,17 @@ class GEDINeuralProcess(nn.Module):
             context_agbd: (n_context, 1)
             query_coords: (n_query, 2)
             query_embeddings: (n_query, patch_size, patch_size, channels)
+            query_agbd: (n_query, 1) or None (only needed during training for ANP)
             training: Whether in training mode (affects latent sampling)
 
         Returns:
-            (predicted_agbd, log_variance, z_mu, z_log_sigma) for query points
+            (predicted_agbd, log_variance, z_mu_context, z_log_sigma_context, z_mu_all, z_log_sigma_all)
             - predicted_agbd: (n_query, 1)
             - log_variance: (n_query, 1) or None
-            - z_mu: (1, latent_dim) or None (only if use_latent)
-            - z_log_sigma: (1, latent_dim) or None (only if use_latent)
+            - z_mu_context: (1, latent_dim) or None - q(z|C) distribution mean
+            - z_log_sigma_context: (1, latent_dim) or None - q(z|C) distribution log std
+            - z_mu_all: (1, latent_dim) or None - p(z|C,T) distribution mean (training only)
+            - z_log_sigma_all: (1, latent_dim) or None - p(z|C,T) distribution log std (training only)
         """
         # encode embeddings
         context_emb_features = self.embedding_encoder(context_embeddings)
@@ -363,7 +367,8 @@ class GEDINeuralProcess(nn.Module):
             context_agbd
         )
 
-        z_mu, z_log_sigma = None, None
+        z_mu_context, z_log_sigma_context = None, None
+        z_mu_all, z_log_sigma_all = None, None
         context_components = []
 
         # Deterministic path (attention or mean pooling)
@@ -384,19 +389,32 @@ class GEDINeuralProcess(nn.Module):
 
         # Latent path (stochastic)
         if self.use_latent:
-            # encode context into latent distribution
-            z_mu, z_log_sigma = self.latent_encoder(context_repr)
+            # Always encode q(z|C) - context only distribution
+            z_mu_context, z_log_sigma_context = self.latent_encoder(context_repr)
 
-            # sample latent variable using reparameterization trick
-            if training:
-                # sample during training
-                # z_log_sigma is log(std), not log(variance)
-                # so sigma = exp(log_sigma), not exp(0.5 * log_sigma)
-                epsilon = torch.randn_like(z_mu, device=z_mu.device, dtype=z_mu.dtype)
-                z = z_mu + epsilon * torch.exp(z_log_sigma)
+            # During training, also encode p(z|C,T) - full distribution with targets
+            if training and query_agbd is not None:
+                # Encode query/target points
+                query_repr_full = self.context_encoder(
+                    query_coords,
+                    query_emb_features,
+                    query_agbd
+                )
+                # Combine context and target representations
+                all_repr = torch.cat([context_repr, query_repr_full], dim=0)
+                # Encode combined representation
+                z_mu_all, z_log_sigma_all = self.latent_encoder(all_repr)
+
+                # Sample from p(z|C,T) during training
+                epsilon = torch.randn_like(z_mu_all, device=z_mu_all.device, dtype=z_mu_all.dtype)
+                z = z_mu_all + epsilon * torch.exp(z_log_sigma_all)
             else:
-                # Use mean during inference
-                z = z_mu
+                # Use q(z|C) during inference or when query_agbd not provided
+                if training:
+                    epsilon = torch.randn_like(z_mu_context, device=z_mu_context.device, dtype=z_mu_context.dtype)
+                    z = z_mu_context + epsilon * torch.exp(z_log_sigma_context)
+                else:
+                    z = z_mu_context
 
             # Expand latent to match query batch size
             z_expanded = z.expand(query_coords.shape[0], -1)
@@ -413,7 +431,7 @@ class GEDINeuralProcess(nn.Module):
             combined_context
         )
 
-        return pred_mean, pred_log_var, z_mu, z_log_sigma
+        return pred_mean, pred_log_var, z_mu_context, z_log_sigma_context, z_mu_all, z_log_sigma_all
 
     def predict(
         self,
@@ -423,12 +441,13 @@ class GEDINeuralProcess(nn.Module):
         query_coords: torch.Tensor,
         query_embeddings: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        pred_mean, pred_log_var, _, _ = self.forward(
+        pred_mean, pred_log_var, _, _, _, _ = self.forward(
             context_coords,
             context_embeddings,
             context_agbd,
             query_coords,
             query_embeddings,
+            query_agbd=None,
             training=False
         )
 
@@ -441,15 +460,50 @@ class GEDINeuralProcess(nn.Module):
 
 
 def kl_divergence_gaussian(
-    mu: torch.Tensor,
-    log_sigma: torch.Tensor
+    mu_q: torch.Tensor,
+    log_sigma_q: torch.Tensor,
+    mu_p: Optional[torch.Tensor] = None,
+    log_sigma_p: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
+    """
+    Compute KL divergence between two Gaussians.
 
-    # KL divergence for Gaussian
-    kl = 0.5 * torch.sum(
-        torch.exp(2 * log_sigma) + mu ** 2 - 1 - 2 * log_sigma,
-        dim=-1
-    )
+    If mu_p and log_sigma_p are provided:
+        KL[p||q] where p ~ N(mu_p, exp(log_sigma_p)^2) and q ~ N(mu_q, exp(log_sigma_q)^2)
+    Otherwise:
+        KL[q||N(0,1)] where q ~ N(mu_q, exp(log_sigma_q)^2)
+
+    Args:
+        mu_q: Mean of q distribution
+        log_sigma_q: Log std of q distribution
+        mu_p: Mean of p distribution (optional)
+        log_sigma_p: Log std of p distribution (optional)
+
+    Returns:
+        KL divergence scalar
+    """
+    if mu_p is not None and log_sigma_p is not None:
+        # KL[p||q] = E_p[log p(z) - log q(z)]
+        # For Gaussians: KL[N(mu_p, sigma_p^2) || N(mu_q, sigma_q^2)]
+        # = log(sigma_q/sigma_p) + (sigma_p^2 + (mu_p - mu_q)^2) / (2*sigma_q^2) - 1/2
+        # Since we have log_sigma = log(sigma), this becomes:
+        # = (log_sigma_q - log_sigma_p) + (exp(2*log_sigma_p) + (mu_p - mu_q)^2) / (2*exp(2*log_sigma_q)) - 1/2
+
+        var_p = torch.exp(2 * log_sigma_p)
+        var_q = torch.exp(2 * log_sigma_q)
+
+        kl = 0.5 * torch.sum(
+            (log_sigma_q - log_sigma_p) * 2 +  # log(var_q / var_p)
+            (var_p + (mu_p - mu_q) ** 2) / var_q - 1,
+            dim=-1
+        )
+    else:
+        # KL[q||N(0,1)] - original behavior for backwards compatibility
+        kl = 0.5 * torch.sum(
+            torch.exp(2 * log_sigma_q) + mu_q ** 2 - 1 - 2 * log_sigma_q,
+            dim=-1
+        )
+
     return kl.mean()
 
 
@@ -457,10 +511,28 @@ def neural_process_loss(
     pred_mean: torch.Tensor,
     pred_log_var: Optional[torch.Tensor],
     target: torch.Tensor,
-    z_mu: Optional[torch.Tensor] = None,
-    z_log_sigma: Optional[torch.Tensor] = None,
+    z_mu_context: Optional[torch.Tensor] = None,
+    z_log_sigma_context: Optional[torch.Tensor] = None,
+    z_mu_all: Optional[torch.Tensor] = None,
+    z_log_sigma_all: Optional[torch.Tensor] = None,
     kl_weight: float = 1.0
 ) -> Tuple[torch.Tensor, dict]:
+    """
+    Compute neural process loss.
+
+    Args:
+        pred_mean: Predicted mean
+        pred_log_var: Predicted log variance (optional)
+        target: Target values
+        z_mu_context: Mean of q(z|C) - context only (optional)
+        z_log_sigma_context: Log std of q(z|C) - context only (optional)
+        z_mu_all: Mean of p(z|C,T) - context + target (optional)
+        z_log_sigma_all: Log std of p(z|C,T) - context + target (optional)
+        kl_weight: Weight for KL term
+
+    Returns:
+        (total_loss, loss_dict)
+    """
 
     if pred_log_var is not None:
         # Gaussian NLL
@@ -476,8 +548,16 @@ def neural_process_loss(
 
     # KL divergence if latent path is used
     kl = torch.tensor(0.0, device=pred_mean.device)
-    if z_mu is not None and z_log_sigma is not None:
-        kl = kl_divergence_gaussian(z_mu, z_log_sigma)
+    if z_mu_context is not None and z_log_sigma_context is not None:
+        if z_mu_all is not None and z_log_sigma_all is not None:
+            # ANP: KL[p(z|C,T) || q(z|C)]
+            kl = kl_divergence_gaussian(
+                z_mu_context, z_log_sigma_context,
+                z_mu_all, z_log_sigma_all
+            )
+        else:
+            # Latent-only or CNP fallback: KL[q(z|C) || N(0,1)]
+            kl = kl_divergence_gaussian(z_mu_context, z_log_sigma_context)
 
     # loss
     total_loss = nll + kl_weight * kl

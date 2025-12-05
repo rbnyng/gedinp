@@ -70,12 +70,13 @@ def plot_sample_predictions(model, dataset, device, n_samples=5, output_path=Non
             target_embeddings = sample['target_embeddings'].to(device)
             target_agbd = sample['target_agbd'].to(device)
 
-            pred_mean, pred_log_var, _, _ = model(
+            pred_mean, pred_log_var, _, _, _, _ = model(
                 context_coords,
                 context_embeddings,
                 context_agbd,
                 target_coords,
                 target_embeddings,
+                query_agbd=None,
                 training=False
             )
 
@@ -154,12 +155,13 @@ def plot_uncertainty_calibration(model, dataset, device, output_path, agbd_scale
             if len(target_coords) == 0:
                 continue
 
-            pred_mean, pred_log_var, _, _ = model(
+            pred_mean, pred_log_var, _, _, _, _ = model(
                 context_coords,
                 context_embeddings,
                 context_agbd,
                 target_coords,
                 target_embeddings,
+                query_agbd=None,
                 training=False
             )
 
