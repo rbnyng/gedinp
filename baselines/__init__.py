@@ -5,6 +5,7 @@ from .models import (
     QuantileRegressionForestBaseline,
     XGBoostBaseline,
     IDWBaseline,
+    RegressionKrigingBaseline,
     MLPBaseline
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     'QuantileRegressionForestBaseline',
     'XGBoostBaseline',
     'IDWBaseline',
+    'RegressionKrigingBaseline',
     'MLPBaseline'
 ]

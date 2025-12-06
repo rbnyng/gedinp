@@ -16,6 +16,7 @@ from baselines import (
     QuantileRegressionForestBaseline,
     XGBoostBaseline,
     IDWBaseline,
+    RegressionKrigingBaseline,
     MLPBaseline
 )
 from utils.normalization import normalize_coords, normalize_agbd, denormalize_agbd
@@ -73,6 +74,17 @@ def parse_args():
     parser.add_argument('--idw_n_neighbors', type=int, default=10,
                         help='IDW: number of nearest neighbors')
 
+    # Regression Kriging arguments
+    parser.add_argument('--rk_rf_n_estimators', type=int, default=100,
+                        help='Regression Kriging: RF number of trees')
+    parser.add_argument('--rk_rf_max_depth', type=int, default=6,
+                        help='Regression Kriging: RF maximum tree depth')
+    parser.add_argument('--rk_variogram_model', type=str, default='spherical',
+                        choices=['spherical', 'exponential', 'gaussian', 'linear'],
+                        help='Regression Kriging: variogram model')
+    parser.add_argument('--rk_nlags', type=int, default=20,
+                        help='Regression Kriging: number of lags for variogram')
+
     # MLP arguments
     parser.add_argument('--mlp_hidden_dims', type=int, nargs='+', default=[1024, 512, 256, 128],
                         help='MLP: hidden layer dimensions')
@@ -110,7 +122,7 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--models', type=str, nargs='+',
                         default=['rf', 'xgb', 'idw'],
-                        choices=['rf', 'qrf', 'xgb', 'idw', 'mlp-dropout'],
+                        choices=['rf', 'qrf', 'xgb', 'idw', 'rk', 'mlp-dropout'],
                         help='Which models to train (default: rf, xgb, idw)')
 
     return parser.parse_args()
@@ -281,6 +293,35 @@ def train_idw(train_coords, train_embeddings, train_agbd, args):
     print(f"power: {args.idw_power}")
     print(f"n_neighbors: {args.idw_n_neighbors}")
     print("Note: IDW ignores embeddings and uses only spatial coordinates")
+
+    start_time = time()
+    model.fit(train_coords, train_embeddings, train_agbd)
+    train_time = time() - start_time
+
+    print(f"Training completed in {train_time:.2f} seconds")
+
+    return model, train_time
+
+
+def train_regression_kriging(train_coords, train_embeddings, train_agbd, args,
+                              val_coords=None, val_embeddings=None, val_agbd_norm=None):
+    print("\n" + "=" * 80)
+    print("Training Regression Kriging Baseline (RF + Kriging)")
+    print("=" * 80)
+
+    model = RegressionKrigingBaseline(
+        rf_n_estimators=args.rk_rf_n_estimators,
+        rf_max_depth=args.rk_rf_max_depth,
+        random_state=args.seed,
+        variogram_model=args.rk_variogram_model,
+        nlags=args.rk_nlags
+    )
+
+    print(f"RF n_estimators: {args.rk_rf_n_estimators}")
+    print(f"RF max_depth: {args.rk_rf_max_depth}")
+    print(f"Variogram model: {args.rk_variogram_model}")
+    print(f"Number of lags: {args.rk_nlags}")
+    print("Note: RK = Random Forest (trend) + Ordinary Kriging (residuals)")
 
     start_time = time()
     model.fit(train_coords, train_embeddings, train_agbd)
@@ -567,6 +608,37 @@ def main():
         with open(output_dir / 'idw.pkl', 'wb') as f:
             pickle.dump(model_idw, f)
 
+    if 'rk' in args.models:
+        model_rk, train_time = train_regression_kriging(
+            train_coords, train_embeddings, train_agbd_norm, args,
+            val_coords, val_embeddings, val_agbd_norm
+        )
+
+        print("\nEvaluating on validation set...")
+        val_metrics, val_pred, _ = evaluate_model(
+            model_rk, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
+        print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(val_metrics, prefix="Validation")
+
+        print("\nEvaluating on test set...")
+        test_metrics, test_pred, _ = evaluate_model(
+            model_rk, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
+        print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(test_metrics, prefix="Test")
+
+        results['regression_kriging'] = {
+            'train_time': train_time,
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics
+        }
+
+        with open(output_dir / 'regression_kriging.pkl', 'wb') as f:
+            pickle.dump(model_rk, f)
+
     if 'mlp-dropout' in args.models:
         model_mlp_dropout, train_time = train_mlp_dropout(
             train_coords, train_embeddings, train_agbd_norm, args,
@@ -654,6 +726,8 @@ def main():
             print("  - xgboost.pkl")
         elif model == 'idw':
             print("  - idw.pkl")
+        elif model == 'rk':
+            print("  - regression_kriging.pkl")
         elif model == 'mlp-dropout':
             print("  - mlp_dropout.pkl")
     print("=" * 80)
