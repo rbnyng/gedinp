@@ -13,6 +13,7 @@ from data.embeddings import EmbeddingExtractor
 from data.spatial_cv import SpatialTileSplitter, BufferedSpatialSplitter
 from baselines import (
     RandomForestBaseline,
+    QuantileRegressionForestBaseline,
     XGBoostBaseline,
     IDWBaseline,
     RegressionKrigingBaseline,
@@ -50,6 +51,14 @@ def parse_args():
                         help='Random Forest: number of trees')
     parser.add_argument('--rf_max_depth', type=int, default=6,
                         help='Random Forest: maximum tree depth')
+
+    # Quantile Regression Forest arguments
+    parser.add_argument('--qrf_n_estimators', type=int, default=100,
+                        help='QRF: number of trees')
+    parser.add_argument('--qrf_max_depth', type=int, default=6,
+                        help='QRF: maximum tree depth')
+    parser.add_argument('--qrf_min_samples_leaf', type=int, default=5,
+                        help='QRF: minimum samples in a leaf (QRF typically needs more than RF)')
 
     # XGBoost arguments
     parser.add_argument('--xgb_n_estimators', type=int, default=100,
@@ -113,7 +122,7 @@ def parse_args():
                         help='Random seed')
     parser.add_argument('--models', type=str, nargs='+',
                         default=['rf', 'xgb', 'idw'],
-                        choices=['rf', 'xgb', 'idw', 'rk', 'mlp-dropout'],
+                        choices=['rf', 'qrf', 'xgb', 'idw', 'rk', 'mlp-dropout'],
                         help='Which models to train (default: rf, xgb, idw)')
 
     return parser.parse_args()
@@ -209,6 +218,32 @@ def train_random_forest(train_coords, train_embeddings, train_agbd, args,
 
     print(f"n_estimators: {args.rf_n_estimators}")
     print(f"max_depth: {args.rf_max_depth}")
+
+    start_time = time()
+    model.fit(train_coords, train_embeddings, train_agbd)
+    train_time = time() - start_time
+
+    print(f"Training completed in {train_time:.2f} seconds")
+
+    return model, train_time
+
+
+def train_qrf(train_coords, train_embeddings, train_agbd, args,
+              val_coords=None, val_embeddings=None, val_agbd_norm=None):
+    print("\n" + "=" * 80)
+    print("Training Quantile Regression Forest Baseline")
+    print("=" * 80)
+
+    model = QuantileRegressionForestBaseline(
+        n_estimators=args.qrf_n_estimators,
+        max_depth=args.qrf_max_depth,
+        min_samples_leaf=args.qrf_min_samples_leaf,
+        random_state=args.seed
+    )
+
+    print(f"n_estimators: {args.qrf_n_estimators}")
+    print(f"max_depth: {args.qrf_max_depth}")
+    print(f"min_samples_leaf: {args.qrf_min_samples_leaf}")
 
     start_time = time()
     model.fit(train_coords, train_embeddings, train_agbd)
@@ -481,6 +516,37 @@ def main():
         with open(output_dir / 'random_forest.pkl', 'wb') as f:
             pickle.dump(model_rf, f)
 
+    if 'qrf' in args.models:
+        model_qrf, train_time = train_qrf(
+            train_coords, train_embeddings, train_agbd_norm, args,
+            val_coords, val_embeddings, val_agbd_norm
+        )
+
+        print("\nEvaluating on validation set...")
+        val_metrics, val_pred, _ = evaluate_model(
+            model_qrf, val_coords, val_embeddings, val_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Validation - Log R²: {val_metrics['log_r2']:.4f}, Log RMSE: {val_metrics['log_rmse']:.4f}, Log MAE: {val_metrics['log_mae']:.4f}")
+        print(f"             Linear RMSE: {val_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {val_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(val_metrics, prefix="Validation")
+
+        print("\nEvaluating on test set...")
+        test_metrics, test_pred, _ = evaluate_model(
+            model_qrf, test_coords, test_embeddings, test_agbd, args.agbd_scale, args.log_transform_agbd
+        )
+        print(f"Test - Log R²: {test_metrics['log_r2']:.4f}, Log RMSE: {test_metrics['log_rmse']:.4f}, Log MAE: {test_metrics['log_mae']:.4f}")
+        print(f"       Linear RMSE: {test_metrics['linear_rmse']:.2f} Mg/ha, Linear MAE: {test_metrics['linear_mae']:.2f} Mg/ha")
+        print_calibration_metrics(test_metrics, prefix="Test")
+
+        results['quantile_rf'] = {
+            'train_time': train_time,
+            'val_metrics': val_metrics,
+            'test_metrics': test_metrics
+        }
+
+        with open(output_dir / 'quantile_rf.pkl', 'wb') as f:
+            pickle.dump(model_qrf, f)
+
     if 'xgb' in args.models:
         model_xgb, train_time = train_xgboost(
             train_coords, train_embeddings, train_agbd_norm, args,
@@ -654,6 +720,8 @@ def main():
     for model in args.models:
         if model == 'rf':
             print("  - random_forest.pkl")
+        elif model == 'qrf':
+            print("  - quantile_rf.pkl")
         elif model == 'xgb':
             print("  - xgboost.pkl")
         elif model == 'idw':

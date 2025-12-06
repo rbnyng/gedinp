@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Tuple, Optional, List
 from sklearn.ensemble import RandomForestRegressor
+from quantile_forest import RandomForestQuantileRegressor
 from scipy.optimize import minimize_scalar
 import xgboost as xgb
 import torch
@@ -129,6 +130,165 @@ class RandomForestBaseline:
             return predictions, std
         else:
             return predictions, None
+
+
+class QuantileRegressionForestBaseline:
+    """
+    Quantile Regression Forest baseline for biomass prediction.
+
+    Uses flattened embeddings + coordinates as features to predict log(AGBD).
+    Provides full conditional quantile predictions for uncertainty estimation.
+
+    Unlike RandomForest (which uses tree variance) or XGBoost (which trains
+    separate models for each quantile), QRF provides all quantiles from a
+    single model by storing all leaf values during training.
+    """
+
+    def __init__(
+        self,
+        n_estimators: int = 100,
+        max_depth: Optional[int] = None,
+        min_samples_split: int = 2,
+        min_samples_leaf: int = 5,
+        n_jobs: int = -1,
+        random_state: int = 42,
+        default_quantiles: Tuple[float, float] = (0.025, 0.975)
+    ):
+        """
+        Initialize Quantile Regression Forest model.
+
+        Args:
+            n_estimators: Number of trees
+            max_depth: Maximum tree depth
+            min_samples_split: Minimum samples to split a node
+            min_samples_leaf: Minimum samples in a leaf (QRF typically needs more than RF)
+            n_jobs: Number of parallel jobs (-1 for all cores)
+            random_state: Random seed
+            default_quantiles: Default quantiles for uncertainty estimation (lower, upper)
+        """
+        self.n_estimators = n_estimators
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.n_jobs = n_jobs
+        self.random_state = random_state
+        self.default_quantiles = default_quantiles
+
+        self.model = RandomForestQuantileRegressor(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_split=min_samples_split,
+            min_samples_leaf=min_samples_leaf,
+            n_jobs=n_jobs,
+            random_state=random_state
+        )
+
+    def _prepare_features(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray
+    ) -> np.ndarray:
+        """
+        Prepare features for Quantile Regression Forest.
+
+        Args:
+            coords: (N, 2) array of [lon, lat]
+            embeddings: (N, H, W, C) array of embedding patches
+
+        Returns:
+            (N, 2 + H*W*C) flattened feature array
+        """
+        # Flatten embeddings
+        n_samples = embeddings.shape[0]
+        embeddings_flat = embeddings.reshape(n_samples, -1)
+
+        # Concatenate coords + embeddings
+        features = np.concatenate([coords, embeddings_flat], axis=1)
+        return features
+
+    def fit(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        agbd: np.ndarray
+    ):
+        """
+        Train the Quantile Regression Forest model.
+
+        Args:
+            coords: (N, 2) training coordinates
+            embeddings: (N, H, W, C) training embeddings
+            agbd: (N,) training AGBD values (already log-transformed)
+        """
+        X = self._prepare_features(coords, embeddings)
+        self.model.fit(X, agbd)
+
+    def predict(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        return_std: bool = True,
+        quantiles: Optional[List[float]] = None
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """
+        Predict AGBD values.
+
+        Args:
+            coords: (N, 2) query coordinates
+            embeddings: (N, H, W, C) query embeddings
+            return_std: If True, return standard deviation estimates from quantile range
+            quantiles: Optional list of quantiles to predict (e.g., [0.025, 0.5, 0.975])
+
+        Returns:
+            predictions: (N,) predicted AGBD values (median by default)
+            std: (N,) prediction std (from quantile range) if return_std=True, else None
+        """
+        X = self._prepare_features(coords, embeddings)
+
+        # Predict median (50th percentile) as the point estimate
+        predictions = self.model.predict(X, quantiles=0.5)
+
+        if return_std:
+            # Use default quantiles to estimate standard deviation
+            lower_q, upper_q = self.default_quantiles
+
+            # Predict quantiles
+            quantile_preds = self.model.predict(X, quantiles=[lower_q, upper_q])
+            lower = quantile_preds[:, 0]
+            upper = quantile_preds[:, 1]
+
+            # Approximate std from quantile range
+            # For 95% interval (0.025, 0.975), std ≈ (upper - lower) / (2 * 1.96)
+            # For arbitrary quantiles, use the corresponding z-scores
+            from scipy.stats import norm
+            z_upper = norm.ppf(upper_q)
+            z_lower = norm.ppf(lower_q)
+            std = (upper - lower) / (z_upper - z_lower)
+
+            return predictions, std
+        else:
+            return predictions, None
+
+    def predict_quantiles(
+        self,
+        coords: np.ndarray,
+        embeddings: np.ndarray,
+        quantiles: List[float]
+    ) -> np.ndarray:
+        """
+        Predict specific quantiles for full uncertainty characterization.
+
+        Args:
+            coords: (N, 2) query coordinates
+            embeddings: (N, H, W, C) query embeddings
+            quantiles: List of quantiles to predict (e.g., [0.1, 0.25, 0.5, 0.75, 0.9])
+
+        Returns:
+            (N, len(quantiles)) array of quantile predictions
+        """
+        X = self._prepare_features(coords, embeddings)
+        return self.model.predict(X, quantiles=quantiles)
+
 
 class XGBoostBaseline:
     """
