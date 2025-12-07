@@ -67,10 +67,7 @@ def compute_region_statistics(region_key: str, region_info: Dict[str, Any],
     # Query region data with tiles
     bbox = region_info['bbox']
     df = querier.query_region_tiles(
-        min_lon=bbox[0],
-        min_lat=bbox[1],
-        max_lon=bbox[2],
-        max_lat=bbox[3],
+        region_bbox=tuple(bbox),
         use_cache=use_cache
     )
 
@@ -234,10 +231,10 @@ def main():
         help='Disable query caching'
     )
     parser.add_argument(
-        '--data-dir',
+        '--cache-dir',
         type=str,
-        default='data/gedi_l4a',
-        help='GEDI data directory (default: data/gedi_l4a)'
+        default=None,
+        help='Cache directory for GEDI queries (optional)'
     )
 
     args = parser.parse_args()
@@ -249,8 +246,8 @@ def main():
         regions_to_process = args.regions
 
     # Initialize querier
-    print(f"Initializing GEDI querier (data_dir: {args.data_dir})...")
-    querier = GEDIQuerier(data_dir=args.data_dir)
+    print(f"Initializing GEDI querier...")
+    querier = GEDIQuerier(cache_dir=args.cache_dir)
 
     # Compute statistics for each region
     all_stats = {}
