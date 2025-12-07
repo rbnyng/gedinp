@@ -3,11 +3,14 @@ Usage:
     # Zero-shot only (default)
     python evaluate_spatial_extrapolation.py --results_dir ./regional_results --output_dir ./extrapolation_analysis
 
-    # Few-shot with 10 training tiles from target region
+    # Few-shot with 10 training tiles from target region (ANP: fine-tuning, baselines: train from scratch)
     python evaluate_spatial_extrapolation.py --results_dir ./regional_results --few_shot_tiles 10 --few_shot_epochs 5
 
     # Both zero-shot and few-shot
     python evaluate_spatial_extrapolation.py --results_dir ./regional_results --few_shot_tiles 10 --include_zero_shot
+
+    # Few-shot for multiple models (including baselines)
+    python evaluate_spatial_extrapolation.py --results_dir ./regional_results --models anp xgboost --few_shot_tiles 10
 """
 
 import argparse
@@ -33,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from data.dataset import GEDINeuralProcessDataset, collate_neural_process
 from models.neural_process import GEDINeuralProcess, kl_divergence_gaussian
-from baselines.models import XGBoostBaseline, RegressionKrigingBaseline
+from baselines.models import XGBoostBaseline, RegressionKrigingBaseline, RandomForestBaseline
 from utils.evaluation import compute_metrics, compute_calibration_metrics
 from utils.config import load_config
 
@@ -178,6 +181,63 @@ class SpatialExtrapolationEvaluator:
         model.eval()
 
         return model
+
+    def load_random_forest_model(self, region: str) -> Optional[List[Tuple[RandomForestBaseline, dict, str]]]:
+        region_dir = self.results_dir / region / 'baselines'
+
+        if not region_dir.exists():
+            logger.warning(f"Baselines directory not found for {region}: {region_dir}")
+            return None
+
+        seed_dirs = sorted(list(region_dir.glob('seed_*')))
+
+        if not seed_dirs:
+            model_dir = region_dir
+            model_path = model_dir / 'random_forest.pkl'
+            config_path = model_dir / 'config.json'
+
+            if not model_path.exists() or not config_path.exists():
+                logger.warning(f"No seed directories and no model in {region_dir}")
+                return None
+
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+
+            logger.info(f"Loaded Random Forest model for {region} from {model_path}")
+            return [(model, config, 'default')]
+
+        models = []
+        for model_dir in seed_dirs:
+            seed_id = model_dir.name
+            model_path = model_dir / 'random_forest.pkl'
+            config_path = model_dir / 'config.json'
+
+            if not model_path.exists():
+                logger.warning(f"Random Forest model not found: {model_path}")
+                continue
+
+            if not config_path.exists():
+                logger.warning(f"Config not found: {config_path}")
+                continue
+
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+
+            models.append((model, config, seed_id))
+            logger.info(f"Loaded Random Forest model for {region} from {seed_id}")
+
+        if not models:
+            logger.warning(f"No valid Random Forest models found for {region}")
+            return None
+
+        logger.info(f"Loaded {len(models)} Random Forest model seeds for {region}")
+        return models
 
     def load_xgboost_model(self, region: str) -> Optional[List[Tuple[XGBoostBaseline, dict, str]]]:
         region_dir = self.results_dir / region / 'baselines'
@@ -508,6 +568,79 @@ class SpatialExtrapolationEvaluator:
 
         return fine_tuned_model
 
+    def train_baseline_few_shot(
+        self,
+        baseline_class,
+        train_loader: DataLoader,
+        train_region: str,
+        test_region: str,
+        model_params: dict = None
+    ):
+        """
+        Train a baseline model (RF, XGBoost, etc.) from scratch on few-shot data.
+
+        Since baseline models can't be fine-tuned like neural networks, we train
+        a new model from scratch on the small few-shot dataset.
+
+        Args:
+            baseline_class: Class of baseline model (e.g., XGBoostBaseline, RandomForestBaseline)
+            train_loader: DataLoader with few-shot training data
+            train_region: Source region name
+            test_region: Target region name
+            model_params: Optional dict of model hyperparameters
+
+        Returns:
+            Trained baseline model
+        """
+        logger.info(f"Training {baseline_class.__name__} from scratch on few-shot data: {train_region} → {test_region}")
+
+        # Extract all data from the dataloader
+        all_coords = []
+        all_embeddings = []
+        all_agbd = []
+
+        for batch in tqdm(train_loader, desc=f"Loading few-shot data"):
+            # For each tile in the batch, collect both context and target
+            # (we want to use all available data for training from scratch)
+            for i in range(len(batch['context_coords'])):
+                # Context data
+                context_coords = batch['context_coords'][i].cpu().numpy()
+                context_embeddings = batch['context_embeddings'][i].cpu().numpy()
+                context_agbd = batch['context_agbd'][i].cpu().numpy()
+
+                # Target data
+                target_coords = batch['target_coords'][i].cpu().numpy()
+                target_embeddings = batch['target_embeddings'][i].cpu().numpy()
+                target_agbd = batch['target_agbd'][i].cpu().numpy()
+
+                # Combine context and target (use all available data)
+                all_coords.append(context_coords)
+                all_coords.append(target_coords)
+                all_embeddings.append(context_embeddings)
+                all_embeddings.append(target_embeddings)
+                all_agbd.append(context_agbd)
+                all_agbd.append(target_agbd)
+
+        # Concatenate all data
+        coords = np.concatenate(all_coords, axis=0)
+        embeddings = np.concatenate(all_embeddings, axis=0)
+        agbd = np.concatenate(all_agbd, axis=0).squeeze()
+
+        logger.info(f"  Few-shot training data: {len(agbd)} samples from {test_region}")
+
+        # Initialize model with provided params or defaults
+        if model_params is None:
+            model_params = {}
+
+        model = baseline_class(**model_params)
+
+        # Train model from scratch
+        model.fit(coords, embeddings, agbd)
+
+        logger.info(f"Training complete for {baseline_class.__name__} {train_region} → {test_region}")
+
+        return model
+
     def evaluate_anp_on_region(
         self,
         model: GEDINeuralProcess,
@@ -645,6 +778,67 @@ class SpatialExtrapolationEvaluator:
 
         return results
 
+    def evaluate_random_forest_on_region(
+        self,
+        model: RandomForestBaseline,
+        dataloader: DataLoader,
+        train_region: str,
+        test_region: str
+    ) -> dict:
+        all_preds = []
+        all_targets = []
+        all_uncertainties = []
+
+        logger.info(f"Evaluating Random Forest {train_region} → {test_region}")
+
+        for batch in tqdm(dataloader, desc=f"RF {train_region}→{test_region}"):
+            for i in range(len(batch['target_coords'])):
+                target_coords = batch['target_coords'][i].cpu().numpy()
+                target_embeddings = batch['target_embeddings'][i].cpu().numpy()
+                target_agbd = batch['target_agbd'][i].cpu().numpy()
+
+                preds, uncertainties = model.predict(
+                    target_coords,
+                    target_embeddings,
+                    return_std=True
+                )
+
+                all_preds.append(preds)
+                all_targets.append(target_agbd.squeeze())
+                all_uncertainties.append(uncertainties)
+
+        preds = np.concatenate(all_preds, axis=0)
+        targets = np.concatenate(all_targets, axis=0)
+        uncertainties = np.concatenate(all_uncertainties, axis=0)
+
+        metrics = compute_metrics(preds, targets, uncertainties)
+
+        calib_metrics = compute_calibration_metrics(preds, targets, uncertainties)
+
+        if 'z_mean' in calib_metrics:
+            calib_metrics['z_score_mean'] = calib_metrics.pop('z_mean')
+        if 'z_std' in calib_metrics:
+            calib_metrics['z_score_std'] = calib_metrics.pop('z_std')
+
+        log_metrics = {
+            'log_rmse': metrics['rmse'],
+            'log_mae': metrics['mae'],
+            'log_r2': metrics['r2'],
+        }
+        if 'mean_uncertainty' in metrics:
+            log_metrics['mean_uncertainty'] = metrics['mean_uncertainty']
+
+        results = {
+            **log_metrics,
+            **calib_metrics,
+            'train_region': train_region,
+            'test_region': test_region,
+            'model_type': 'random_forest',
+            'num_predictions': len(preds)
+        }
+
+        return results
+
     def evaluate_regression_kriging_on_region(
         self,
         model: RegressionKrigingBaseline,
@@ -720,6 +914,8 @@ class SpatialExtrapolationEvaluator:
                     model_data = self.load_anp_model(region)
                 elif model_type == 'xgboost':
                     model_data = self.load_xgboost_model(region)
+                elif model_type == 'random_forest':
+                    model_data = self.load_random_forest_model(region)
                 elif model_type == 'regression_kriging':
                     model_data = self.load_regression_kriging_model(region)
                 else:
@@ -770,20 +966,72 @@ class SpatialExtrapolationEvaluator:
                                 continue
 
                             eval_model = model
-                            if transfer_type == 'few-shot' and model_type == 'anp':
-                                if 'train' in data_loaders:
+
+                            # Handle few-shot training/fine-tuning
+                            if transfer_type == 'few-shot':
+                                if 'train' not in data_loaders:
+                                    logger.warning(f"No training data for few-shot in {test_region}, skipping")
+                                    if model_type == 'anp':
+                                        model.cpu()
+                                    continue
+
+                                if model_type == 'anp':
+                                    # Fine-tune ANP model
                                     eval_model = self.fine_tune_anp_model(
                                         model,
                                         data_loaders['train'],
                                         train_region,
                                         test_region
                                     )
-                                else:
-                                    logger.warning(f"No training data for few-shot in {test_region}, skipping")
-                                    if model_type == 'anp':
-                                        model.cpu()
-                                    continue
+                                elif model_type == 'xgboost':
+                                    # Train XGBoost from scratch on few-shot data
+                                    model_params = {
+                                        'n_estimators': config.get('n_estimators', 100),
+                                        'max_depth': config.get('max_depth', 6),
+                                        'learning_rate': config.get('learning_rate', 0.1),
+                                        'subsample': config.get('subsample', 0.8),
+                                        'colsample_bytree': config.get('colsample_bytree', 0.8),
+                                        'random_state': config.get('random_state', 42)
+                                    }
+                                    eval_model = self.train_baseline_few_shot(
+                                        XGBoostBaseline,
+                                        data_loaders['train'],
+                                        train_region,
+                                        test_region,
+                                        model_params
+                                    )
+                                elif model_type == 'random_forest':
+                                    # Train Random Forest from scratch on few-shot data
+                                    model_params = {
+                                        'n_estimators': config.get('n_estimators', 100),
+                                        'max_depth': config.get('max_depth', None),
+                                        'min_samples_split': config.get('min_samples_split', 2),
+                                        'min_samples_leaf': config.get('min_samples_leaf', 1),
+                                        'random_state': config.get('random_state', 42)
+                                    }
+                                    eval_model = self.train_baseline_few_shot(
+                                        RandomForestBaseline,
+                                        data_loaders['train'],
+                                        train_region,
+                                        test_region,
+                                        model_params
+                                    )
+                                elif model_type == 'regression_kriging':
+                                    # Train Regression Kriging from scratch on few-shot data
+                                    model_params = {
+                                        'n_estimators': config.get('n_estimators', 100),
+                                        'max_depth': config.get('max_depth', None),
+                                        'random_state': config.get('random_state', 42)
+                                    }
+                                    eval_model = self.train_baseline_few_shot(
+                                        RegressionKrigingBaseline,
+                                        data_loaders['train'],
+                                        train_region,
+                                        test_region,
+                                        model_params
+                                    )
 
+                            # Evaluate the model
                             if model_type == 'anp':
                                 result = self.evaluate_anp_on_region(
                                     eval_model,
@@ -792,17 +1040,20 @@ class SpatialExtrapolationEvaluator:
                                     test_region
                                 )
                             elif model_type == 'xgboost':
-                                if transfer_type == 'few-shot':
-                                    continue
                                 result = self.evaluate_xgboost_on_region(
                                     eval_model,
                                     data_loaders['test'],
                                     train_region,
                                     test_region
                                 )
+                            elif model_type == 'random_forest':
+                                result = self.evaluate_random_forest_on_region(
+                                    eval_model,
+                                    data_loaders['test'],
+                                    train_region,
+                                    test_region
+                                )
                             elif model_type == 'regression_kriging':
-                                if transfer_type == 'few-shot':
-                                    continue
                                 result = self.evaluate_regression_kriging_on_region(
                                     eval_model,
                                     data_loaders['test'],
@@ -815,7 +1066,8 @@ class SpatialExtrapolationEvaluator:
                             seed_results.append(result)
                             results.append(result)
 
-                            if transfer_type == 'few-shot' and model_type == 'anp' and eval_model is not model:
+                            # Cleanup few-shot models
+                            if transfer_type == 'few-shot' and eval_model is not model:
                                 del eval_model
 
                             if model_type == 'anp':
@@ -1452,7 +1704,7 @@ Examples:
     parser.add_argument(
         '--models',
         nargs='+',
-        choices=['anp', 'xgboost', 'regression_kriging'],
+        choices=['anp', 'xgboost', 'random_forest', 'regression_kriging'],
         default=['anp', 'xgboost'],
         help='Model types to evaluate (default: anp xgboost)'
     )
