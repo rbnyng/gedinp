@@ -49,7 +49,7 @@ REGIONS = {
 
 
 def compute_region_statistics(region_key: str, region_info: Dict[str, Any],
-                              querier: GEDIQuerier, use_cache: bool = True) -> Dict[str, Any]:
+                              querier: GEDIQuerier) -> Dict[str, Any]:
     """
     Compute comprehensive statistics for a study region.
 
@@ -57,7 +57,6 @@ def compute_region_statistics(region_key: str, region_info: Dict[str, Any],
         region_key: Region identifier (e.g., 'maine')
         region_info: Region metadata including bbox
         querier: GEDIQuerier instance
-        use_cache: Whether to use cached queries
 
     Returns:
         Dictionary containing region statistics
@@ -67,8 +66,7 @@ def compute_region_statistics(region_key: str, region_info: Dict[str, Any],
     # Query region data with tiles
     bbox = region_info['bbox']
     df = querier.query_region_tiles(
-        region_bbox=tuple(bbox),
-        use_cache=use_cache
+        region_bbox=tuple(bbox)
     )
 
     if len(df) == 0:
@@ -245,9 +243,16 @@ def main():
     else:
         regions_to_process = args.regions
 
+    # Handle caching - if --no-cache is set, disable cache_dir
+    cache_dir = None if args.no_cache else args.cache_dir
+
     # Initialize querier
     print(f"Initializing GEDI querier...")
-    querier = GEDIQuerier(cache_dir=args.cache_dir)
+    if cache_dir:
+        print(f"  Cache directory: {cache_dir}")
+    else:
+        print(f"  Caching disabled")
+    querier = GEDIQuerier(cache_dir=cache_dir)
 
     # Compute statistics for each region
     all_stats = {}
@@ -260,8 +265,7 @@ def main():
         stats = compute_region_statistics(
             region_key,
             region_info,
-            querier,
-            use_cache=not args.no_cache
+            querier
         )
 
         if stats is not None:
