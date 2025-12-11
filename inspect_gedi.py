@@ -3,6 +3,7 @@ import geopandas as gpd
 from shapely.geometry import box
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.stats import gaussian_kde
 
 provider = gdb.GEDIProvider(
     storage_type='s3',
@@ -71,3 +72,32 @@ ax.legend()
 plt.tight_layout()
 fig.savefig("gedi_agbd_distribution_logscale.png", dpi=300)
 print("Distribution plot saved as 'gedi_agbd_distribution.png'")
+
+cutoff = 500
+agbd_clip = agbd[agbd <= cutoff]
+
+kde = gaussian_kde(agbd_clip)
+x_vals = np.linspace(0, cutoff, 2000)
+kde_vals = kde(x_vals)
+
+fig, ax = plt.subplots(figsize=(12, 4))
+
+ax.fill_between(x_vals, kde_vals, color='red', alpha=0.5)
+ax.plot(x_vals, kde_vals, color='red', linewidth=2)
+
+ax.spines['left'].set_position('zero')
+ax.spines['bottom'].set_position('zero')
+
+ax.spines['right'].set_color('none')
+ax.spines['top'].set_color('none')
+
+ax.set_xlim(0, cutoff)
+ax.set_ylim(0, max(kde_vals) * 1.05)
+
+ax.set_xlabel("AGBD (Mg/ha)", fontsize=10, fontweight='bold')
+ax.set_ylabel("Density", fontsize=10, fontweight='bold')
+
+ax.set_title("AGBD KDE", fontsize=10, fontweight='bold')
+
+plt.tight_layout()
+fig.savefig("gedi_agbd_kde.png", dpi=300)
